@@ -20,12 +20,13 @@ python3 /opt/praxis/bin/run_llama.py chat --print-command >/tmp/chat-command.jso
 import json, subprocess
 args = json.load(open('/tmp/chat-command.json'))
 assert args[0] == '/opt/llama.cpp/bin/llama-server', args
-assert '--moe-expert-cache-size' in args and args[args.index('--moe-expert-cache-size')+1] == '96'
+assert '--moe-expert-cache-size' in args and args[args.index('--moe-expert-cache-size')+1] == '56'
 assert '--load-mode' in args and args[args.index('--load-mode')+1] == 'none'
 assert '--cache-ram' in args and args[args.index('--cache-ram')+1] == '0'
 assert '--kv-offload' in args and '--cache-type-k' in args
-assert '--spec-draft-model' not in args and '--moe-cache-profile' not in args and '--moe-cache-slots' not in args
-print('16 GB guide argument geometry OK')
+assert '--spec-type' in args and args[args.index('--spec-type')+1] == 'draft-mtp'
+assert '--moe-cache-profile' not in args and '--moe-cache-slots' not in args
+print('default Flash-Next variant argument geometry OK')
 PY
 python3 - <<'PY'
 import configparser, json

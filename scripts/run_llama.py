@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 
-from llama_config import BIN, child_environment, runtime_environment, server_command, settings
+from llama_config import BIN, child_environment, model_spec, runtime_environment, server_command, settings
 from provision_llama import atomic_json, provision, read_receipt
 
 STATE_DIR = Path('/workspace/llama.cpp/run')
@@ -57,6 +57,7 @@ def require_cuda(env):
 def serve(kind, env):
     config = settings(env)
     command = server_command(kind, env)  # validate before downloads/inference
+    has_draft = 'draft' in model_spec('chat', env)
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     state = STATE_DIR / (kind + '.json')
     state.unlink(missing_ok=True)
@@ -68,6 +69,8 @@ def serve(kind, env):
     if kind == 'chat':
         require_cuda(env)
     provision(kind, env, download=config['download'])
+    if kind == 'chat' and has_draft:
+        provision('draft', env, download=config['download'])
     child = child_environment(env)
     if kind == 'embedding':
         child.pop('GGML_CUDA_REGISTER_HOST', None)
@@ -86,6 +89,10 @@ def serve(kind, env):
             if kind == 'chat' and cache_active(line) and not receipt['cache_active']:
                 receipt['cache_active'] = True
                 atomic_json(state, receipt)
+            if (kind == 'chat' and has_draft
+                    and 'common_speculative_init_result: loading draft model ' in line
+                    and not receipt['cache_active']):
+                raise RuntimeError('Main model CUDA expert cache was not activated before MTP drafting')
         code = process.wait()
         if kind == 'chat' and not receipt['cache_active']:
             raise RuntimeError('No CUDA MoE expert-cache activation was reported')

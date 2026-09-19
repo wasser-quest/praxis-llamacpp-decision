@@ -35,7 +35,7 @@ class AcceptanceTests(unittest.TestCase):
             if url.endswith('/health'):
                 return {'status': 'ok'}
             if url.endswith('/v1/models'):
-                return {'data': [{'id': 'qwen3.6-35b-a3b'}]}
+                return {'data': [{'id': 'qwen3.8-flash-next'}]}
             if url.endswith('/v1/embeddings'):
                 return {'data': [{'embedding': [0.25] * 768}]}
             self.assertTrue(url.endswith('/v1/chat/completions'))

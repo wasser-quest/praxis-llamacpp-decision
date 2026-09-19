@@ -18,25 +18,48 @@ import run_llama as runner
 
 class ConfigTests(unittest.TestCase):
     @patch.object(config, 'physical_thread_count', return_value=6)
-    def test_guide_recipe_uses_generelschwerz_not_other_fork_flags(self, detect):
+    def test_default_flash_next_variant_uses_mtp_draft_and_original_geometry(self, detect):
         args = config.server_command('chat', {})
         detect.assert_called_once_with()
         for key, value in [('--threads', '6'), ('--threads-batch', '6'),
+                           ('--spec-draft-threads', '6'), ('--spec-draft-threads-batch', '6'),
                            ('--n-cpu-moe', '99'), ('--n-gpu-layers', '99'),
                            ('--flash-attn', 'on'), ('--fit', 'off'), ('--load-mode', 'none'),
                            ('--cache-type-k', 'f16'), ('--cache-type-v', 'f16'),
-                           ('--ctx-size', '65536'), ('--batch-size', '8192'), ('--ubatch-size', '8192'),
-                           ('--cache-ram', '0'), ('--moe-expert-cache-size', '96'),
+                           ('--ctx-size', '4096'), ('--batch-size', '512'), ('--ubatch-size', '512'),
+                           ('--cache-ram', '0'), ('--moe-expert-cache-size', '56'),
+                           ('--spec-type', 'draft-mtp'), ('--spec-draft-ngl', '99'), ('--spec-draft-n-max', '2'),
                            ('--host', '127.0.0.1'), ('--port', '11435'), ('--parallel', '1')]:
             self.assertEqual(args[args.index(key) + 1], value, key)
         for key in ['--kv-offload', '--jinja', '--no-slots', '--no-warmup']:
             self.assertIn(key, args)
-        for key in ['--spec-type', '--spec-draft-model', '--spec-draft-ngl', '--moe-cache-slots',
-                    '--moe-cache-profile', '--verbosity', '--lazy-mode']:
+        for key in ['--moe-cache-profile', '--moe-cache-slots', '--verbosity', '--lazy-mode']:
+            self.assertNotIn(key, args)
+        self.assertEqual(args[args.index('--spec-draft-model') + 1],
+                         '/workspace/llama.cpp/models/qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf')
+        self.assertIn('Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf', ' '.join(args))
+
+    @patch.object(config, 'physical_thread_count', return_value=6)
+    def test_qwen36_16gb_variant_switches_geometry_and_drops_draft(self, detect):
+        env = {'LLAMA_MODEL': 'qwen3.6-35b-a3b'}
+        args = config.server_command('chat', env)
+        detect.assert_called_once_with()
+        for key, value in [('--ctx-size', '65536'), ('--batch-size', '8192'), ('--ubatch-size', '8192'),
+                           ('--moe-expert-cache-size', '96')]:
+            self.assertEqual(args[args.index(key) + 1], value, key)
+        for key in ['--spec-type', '--spec-draft-model', '--spec-draft-ngl']:
             self.assertNotIn(key, args)
         self.assertIn('Qwen3.6-35B-A3B-Q4_K_M.gguf', ' '.join(args))
+        self.assertEqual(config.model_dir('chat', env),
+                         Path('/workspace/llama.cpp/models/qwen3.6-35b-a3b'))
 
-    def test_cache_size_is_a_tunable_disable_and_only_chat_embedding_serve(self):
+    def test_unknown_variant_is_rejected(self):
+        for env in [{'LLAMA_MODEL': 'gpt-5'}, {'LLAMA_MODEL_DIR': 'relative'},
+                    {'LLAMA_MODEL_DIR': '/tmp/../secret'}]:
+            with self.subTest(env=env), self.assertRaises(ValueError):
+                config.server_command('chat', env)
+
+    def test_cache_size_is_tunable_and_disable(self):
         args = config.server_command('chat', {'LLAMA_MOE_CACHE_SIZE': '48'})
         self.assertEqual(args[args.index('--moe-expert-cache-size') + 1], '48')
         args = config.server_command('chat', {'LLAMA_MOE_CACHE_SIZE': '0'})
@@ -49,8 +72,11 @@ class ConfigTests(unittest.TestCase):
             for env in [{}, {'LLAMA_THREADS': 'auto'}]:
                 for kind in ['chat', 'embedding']:
                     args = config.server_command(kind, env)
-                    self.assertEqual(args[args.index('--threads') + 1], '12')
-                    self.assertEqual(args[args.index('--threads-batch') + 1], '12')
+                    keys = ['--threads', '--threads-batch']
+                    if kind == 'chat':
+                        keys += ['--spec-draft-threads', '--spec-draft-threads-batch']
+                    for key in keys:
+                        self.assertEqual(args[args.index(key) + 1], '12')
 
     def test_numeric_thread_override_does_not_require_topology(self):
         with patch.object(config, 'physical_thread_count', side_effect=AssertionError('must not detect')) as detect:
@@ -87,18 +113,28 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn('--moe-expert-cache-size', args)
         self.assertNotIn('--spec-draft-model', args)
 
-    def test_pins_have_the_single_16gb_gguf_and_independent_nomic_weights(self):
-        models = config.models()
-        self.assertEqual(len(models['chat']['files']), 1)
-        chat = models['chat']['files'][0]
-        self.assertEqual(chat['path'], 'Qwen3.6-35B-A3B-Q4_K_M.gguf')
-        self.assertEqual(chat['size'], 20419565568)
-        self.assertEqual(chat['sha256'], '671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7')
-        self.assertNotIn('mtp', models)
-        for model in models.values():
-            self.assertRegex(model['revision'], r'^[0-9a-f]{40}$')
-            for entry in model['files']:
+    def test_manifest_pins_both_variants_and_independent_nomic_weights(self):
+        manifest = config.models()
+        for name in ('qwen3.8-flash-next', 'qwen3.6-35b-a3b'):
+            self.assertIn(name, manifest['variants'])
+        flash = manifest['variants']['qwen3.8-flash-next']
+        self.assertEqual(len(flash['files']), 3)
+        self.assertEqual(sum(f['size'] for f in flash['files']), 81961823936)
+        self.assertEqual(flash['draft']['revision'], flash['revision'])
+        self.assertEqual(flash['draft']['files'][0]['size'], 2786568256)
+        self.assertEqual(flash['draft']['files'][0]['sha256'],
+                         '5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6')
+        qwen36 = manifest['variants']['qwen3.6-35b-a3b']
+        self.assertEqual(len(qwen36['files']), 1)
+        self.assertEqual(qwen36['files'][0]['size'], 20419565568)
+        self.assertEqual(qwen36['files'][0]['sha256'],
+                         '671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7')
+        self.assertNotIn('draft', qwen36)
+        for name, variant in manifest['variants'].items():
+            self.assertRegex(variant['revision'], r'^[0-9a-f]{40}$')
+            for entry in variant['files']:
                 self.assertRegex(entry['sha256'], r'^[0-9a-f]{64}$')
+        self.assertRegex(manifest['embedding']['revision'], r'^[0-9a-f]{40}$')
 
 
 class InstanceTuningTests(unittest.TestCase):
@@ -109,16 +145,16 @@ class InstanceTuningTests(unittest.TestCase):
         patcher.start(); self.addCleanup(patcher.stop)
 
     def test_persistent_cache_tuning_overrides_supervisor_env_and_keeps_embeddings_separate(self):
-        env = {'LLAMA_MOE_CACHE_SIZE': '96'}
-        self.assertEqual(config.settings(env)['cache_size'], 96)
-        self.path.write_text('{"LLAMA_MOE_CACHE_SIZE":132}')
-        self.assertEqual(config.settings(env)['cache_size'], 132)
-        self.assertEqual(config.child_environment(env)['LLAMA_MOE_CACHE_SIZE'], '132')
+        env = {'LLAMA_MOE_CACHE_SIZE': '56'}
+        self.assertEqual(config.settings(env)['cache_size'], 56)
+        self.path.write_text('{"LLAMA_MOE_CACHE_SIZE":80}')
+        self.assertEqual(config.settings(env)['cache_size'], 80)
+        self.assertEqual(config.child_environment(env)['LLAMA_MOE_CACHE_SIZE'], '80')
         chat = config.server_command('chat', env)
         embedding = config.server_command('embedding', env)
-        self.assertEqual(chat[chat.index('--moe-expert-cache-size') + 1], '132')
+        self.assertEqual(chat[chat.index('--moe-expert-cache-size') + 1], '80')
         self.assertEqual(embedding[embedding.index('--ctx-size') + 1], '2048')
-        self.assertEqual(env, {'LLAMA_MOE_CACHE_SIZE': '96'})
+        self.assertEqual(env, {'LLAMA_MOE_CACHE_SIZE': '56'})
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)):
             receipt = {'pid': os.getpid(), 'process': runner.process_identity(os.getpid()),
                        'command': runner.command_digest(chat), 'cache_active': True}
@@ -151,7 +187,7 @@ class DownloadTests(unittest.TestCase):
         self.entry = {'path': 'Qwen3.6-35B-A3B-Q4_K_M.gguf', 'size': len(self.data), 'sha256': hashlib.sha256(self.data).hexdigest()}
         self.model = {'repository': 'owner/model', 'revision': 'a'*40, 'files': [self.entry]}
         self.target = self.directory / self.entry['path']
-        self.patcher = patch.object(provision, 'models', return_value={'chat': self.model})
+        self.patcher = patch.object(provision, 'model_spec', return_value=self.model)
         self.patcher.start(); self.addCleanup(self.patcher.stop)
 
     def response(self, data=None):
@@ -225,23 +261,24 @@ class DownloadTests(unittest.TestCase):
 
 class RuntimeTests(unittest.TestCase):
     def test_cache_activation_requires_the_moe_cache_pool_line(self):
-        self.assertTrue(runner.cache_active('moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (96 slots x 0.44 MiB)'))
+        self.assertTrue(runner.cache_active('moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (56 slots x 0.44 MiB)'))
         self.assertFalse(runner.cache_active('model loaded; no cache message'))
         self.assertFalse(runner.cache_active('expert cache: 40 layers x 56 slots, 8164.00 MiB uploaded to CUDA0'))
 
     def test_no_cuda_refuses_cpu_chat_fallback(self):
         with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'Available devices:\n', '')):
             with self.assertRaisesRegex(RuntimeError, 'No CUDA device'): runner.require_cuda({})
-        with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'Available devices:\n  CUDA0: NVIDIA RTX 5060 Ti\n', '')):
+        with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'Available devices:\n  CUDA0: NVIDIA RTX 4060 Ti\n', '')):
             runner.require_cuda({})
 
-    def test_startup_env_drives_download_and_launch(self):
+    def test_startup_env_drives_download_and_launch_with_draft(self):
         from unittest.mock import MagicMock
         child = MagicMock()
         child.pid = os.getpid()
         child.stdout = io.StringIO(
             'load_model: loading model\n'
-            'moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (96 slots x 0.44 MiB)\n')
+            'moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (56 slots x 0.44 MiB)\n'
+            "common_speculative_init_result: loading draft model '/models/mtp.gguf'\n")
         child.wait.return_value = 0
         child.poll.return_value = 0
         env = {'LLAMA_DOWNLOAD_MODELS': '1'}
@@ -251,11 +288,30 @@ class RuntimeTests(unittest.TestCase):
                 patch.object(runner.subprocess, 'Popen', return_value=child) as launch:
             self.assertEqual(runner.serve('chat', env), 0)
             cuda.assert_called_once_with(env)
-            self.assertEqual(download.call_args_list, [call('chat', env, download=True)])
+            self.assertEqual(download.call_args_list,
+                             [call('chat', env, download=True), call('draft', env, download=True)])
+            self.assertIn('--spec-type', launch.call_args.args[0])
+            self.assertIn('draft-mtp', launch.call_args.args[0])
             self.assertIn('--moe-expert-cache-size', launch.call_args.args[0])
-            self.assertNotIn('--spec-draft-model', launch.call_args.args[0])
             self.assertEqual(launch.call_args.kwargs['env']['GGML_CUDA_REGISTER_HOST'], '1')
             self.assertFalse((Path(d) / 'chat.json').exists())
+
+    def test_draftless_variant_downloads_no_draft(self):
+        from unittest.mock import MagicMock
+        child = MagicMock()
+        child.pid = os.getpid()
+        child.stdout = io.StringIO(
+            'moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (96 slots x 0.44 MiB)\n')
+        child.wait.return_value = 0
+        child.poll.return_value = 0
+        env = {'LLAMA_DOWNLOAD_MODELS': '1', 'LLAMA_MODEL': 'qwen3.6-35b-a3b'}
+        with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
+                patch.object(runner, 'require_cuda'), \
+                patch.object(runner, 'provision') as download, \
+                patch.object(runner.subprocess, 'Popen', return_value=child) as launch:
+            self.assertEqual(runner.serve('chat', env), 0)
+            self.assertEqual(download.call_args_list, [call('chat', env, download=True)])
+            self.assertNotIn('--spec-type', launch.call_args.args[0])
 
     def test_missing_cache_activation_fails_closed(self):
         from unittest.mock import MagicMock
@@ -266,6 +322,19 @@ class RuntimeTests(unittest.TestCase):
                 patch.object(runner, 'require_cuda'), patch.object(runner, 'provision'), \
                 patch.object(runner.subprocess, 'Popen', return_value=child):
             with self.assertRaisesRegex(RuntimeError, 'No CUDA MoE expert-cache activation'):
+                runner.serve('chat', {})
+            child.terminate.assert_called_once()
+            self.assertFalse((Path(d) / 'chat.json').exists())
+
+    def test_draft_does_not_mask_missing_main_cache_activation(self):
+        from unittest.mock import MagicMock
+        child = MagicMock(pid=os.getpid())
+        child.stdout = io.StringIO("common_speculative_init_result: loading draft model '/models/mtp.gguf'\n")
+        child.poll.return_value = None
+        with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
+                patch.object(runner, 'require_cuda'), patch.object(runner, 'provision'), \
+                patch.object(runner.subprocess, 'Popen', return_value=child):
+            with self.assertRaisesRegex(RuntimeError, 'not activated before MTP drafting'):
                 runner.serve('chat', {})
             child.terminate.assert_called_once()
             self.assertFalse((Path(d) / 'chat.json').exists())
@@ -295,7 +364,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(runner.runtime_ready('chat', {}))
             with patch.object(config, 'physical_thread_count', return_value=config.thread_count({}) % 512 + 1):
                 self.assertFalse(runner.runtime_ready('chat', {}))
-            self.assertFalse(runner.runtime_ready('chat', {'LLAMA_MOE_CACHE_SIZE': '48'}))
+            self.assertFalse(runner.runtime_ready('chat', {'LLAMA_MODEL': 'qwen3.6-35b-a3b'}))
             receipt['cache_active'] = False; path.write_text(json.dumps(receipt))
             self.assertFalse(runner.runtime_ready('chat', {}))
             receipt['cache_active'] = True; receipt['process'] = ['stale', 'pid']; path.write_text(json.dumps(receipt))

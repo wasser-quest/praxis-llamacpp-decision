@@ -72,12 +72,13 @@ class DeploymentTests(unittest.TestCase):
                      'scripts/profile_llama.py']:
             self.assertFalse((ROOT / path).exists(), path)
         env = (ROOT / 'runtime.env.example').read_text()
-        for key in ['LLAMA_MOE_CACHE_SIZE=96', 'LLAMA_MODEL_DIR=/workspace/llama.cpp/models/qwen3.6-35b-a3b']:
+        for key in ['LLAMA_MODEL=qwen3.8-flash-next', 'LLAMA_DOWNLOAD_MODELS=1',
+                    'LLAMA_MODEL=qwen3.6-35b-a3b', 'qwen3.6-35b-a3b']:
             self.assertIn(key, env)
         for key in ['PRAXIS_QWEN_TTS', 'VOSK_DOWNLOAD_MODELS', 'COQUI_TOS_AGREED', 'LLAMA_MTP_MODEL_DIR']:
             self.assertNotIn(key, env)
 
-    def test_runtime_example_selects_the_16gb_geometry(self):
+    def test_runtime_example_selects_the_default_flash_recipe_and_can_switch(self):
         config = module('llama_config')
         env = dict(line.split('=', 1) for line in (ROOT / 'runtime.env.example').read_text().splitlines() if '=' in line and not line.startswith('#'))
         self.assertEqual(env['LLAMA_THREADS'], 'auto')
@@ -85,11 +86,17 @@ class DeploymentTests(unittest.TestCase):
             plan = config.settings(env)
             detect.assert_called_once_with()
         self.assertTrue(plan['download'])
-        self.assertEqual((plan['cache_size'], plan['threads'], plan['context'], plan['batch'], plan['ubatch']),
-                         (96, 6, 65536, 8192, 8192))
+        self.assertEqual((plan['variant'], plan['cache_size'], plan['threads'], plan['context'],
+                          plan['batch'], plan['ubatch']), ('qwen3.8-flash-next', 56, 6, 4096, 512, 512))
         chat = config.server_command('chat', env)
-        self.assertEqual(chat[chat.index('--moe-expert-cache-size') + 1], '96')
-        self.assertIn('Qwen3.6-35B-A3B-Q4_K_M.gguf', ' '.join(chat))
+        self.assertEqual(chat[chat.index('--moe-expert-cache-size') + 1], '56')
+        self.assertIn('draft-mtp', chat)
+        self.assertIn('Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf', ' '.join(chat))
+        # Switching the model is one env var.
+        switched = config.server_command('chat', dict(env, LLAMA_MODEL='qwen3.6-35b-a3b'))
+        self.assertEqual(switched[switched.index('--ctx-size') + 1], '65536')
+        self.assertEqual(switched[switched.index('--moe-expert-cache-size') + 1], '96')
+        self.assertNotIn('--spec-type', switched)
         embedding = config.server_command('embedding', env)
         self.assertEqual(embedding[embedding.index('--ctx-size') + 1], '2048')
         self.assertNotIn('LLAMA_MTP_MODEL_DIR', env)

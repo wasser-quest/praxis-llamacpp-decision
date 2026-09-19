@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import time
 
-from llama_config import models
+from llama_config import model_spec, variant_name
 from private_http import request, validate_base
 
 
@@ -40,7 +40,7 @@ def run(base, timeout=300, report=None):
     if not 1 <= timeout <= 900:
         raise ValueError('Timeout must be 1–900 seconds')
     report = report if report is not None else {}
-    alias = models()['chat']['alias']
+    alias = model_spec('chat', os.environ)['alias']
     report.update(status='running', model=alias, steps=[])
     deadline = time.monotonic() + timeout
     require(request(base + '/health', deadline=deadline).get('status') == 'ok', 'Chat is not ready')
@@ -84,7 +84,7 @@ def run(base, timeout=300, report=None):
     # tokens, multiple prefill batches, non-greedy sampling, then another request.
     chat('long-prompt', [{'role': 'user', 'content': prompt}], ['Bergsee', '42'], temperature=0.3)
     chat('after-long-prompt', [{'role': 'user', 'content': 'Wie viel ist 7 mal 8? Antworte mit einem kurzen Satz.'}], ['56'])
-    embedding = request(base + '/v1/embeddings', {'model': models()['embedding']['alias'], 'input': 'search_query: Hallo Welt'}, deadline)
+    embedding = request(base + '/v1/embeddings', {'model': model_spec('embedding', os.environ)['alias'], 'input': 'search_query: Hallo Welt'}, deadline)
     vector = embedding['data'][0]['embedding']
     require(len(vector) == 768 and all(finite(x) for x in vector) and any(x != 0 for x in vector), 'Invalid embedding')
     require(request(base + '/health', deadline=deadline).get('status') == 'ok', 'Chat lost readiness')

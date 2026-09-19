@@ -18,7 +18,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from llama_config import model_dir, models, settings
+from llama_config import model_dir, model_spec, settings
 
 CHUNK = 4 * 1024 * 1024
 
@@ -127,7 +127,7 @@ def download_file(model, entry, target, deadline):
 
 
 def provision(kind, env, download=False, rehash=False):
-    config, model = settings(env), models()[kind]
+    config, model = settings(env), model_spec(kind, env)
     directory = model_dir(kind, env)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with lock(directory / '.provision.lock'):
@@ -163,7 +163,7 @@ def provision(kind, env, download=False, rehash=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--kind', choices=['chat', 'embedding'], default='chat')
+    parser.add_argument('--kind', choices=['chat', 'draft', 'embedding'], default='chat')
     parser.add_argument('--download', action='store_true')
     parser.add_argument('--rehash', action='store_true', help='Read and SHA256 every byte, ignoring verification receipts')
     args = parser.parse_args()

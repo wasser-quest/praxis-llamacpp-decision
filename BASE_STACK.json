@@ -6,14 +6,14 @@
   "sha256": {
     ".dockerignore": "969dfd0912cc0c0c953498b26afe5f613151b7e193dec85f7f03068828a103e5",
     ".gitignore": "a3c0c767d112efa9756e303df118fd0bd757f90da20e6f6db49761799825deba",
-    "DEPLOY.md": "77a6e2fbc714fa38eab6d5a68b5d59d19edc72035c2d179220f115a33ab3d61b",
-    "Dockerfile": "0520ea9b9fd5b454fee39dbc0990d2521bc7b16e9bcd255ee27f835232facc63",
-    "runtime.env.example": "b17f8f460b8217ee9b01c8b7478d987c1a7cfd9782cefb659715432f450c51f0",
-    "scripts/build.sh": "0d301b1a31abad9a97e59456cdcf6b0393c12264490b27182f5dc39d80ddbcff",
+    "DEPLOY.md": "7d9d55714e2802859f5472d1763db7235b42f6eedd9f45415d148a5262d1096e",
+    "Dockerfile": "9cc643c637f5679912df40af99eb5b0b1ec87e21e6dbc3017eedb9a74a9983d9",
+    "runtime.env.example": "5bc86443421df30074965ac75cc291b251adcdf75ebe4c754f719e6cef37ea10",
+    "scripts/build.sh": "0a209ac7cded5196cafec4bd0f32a71360e66d849e6842b66d9b8d026fafa3ac",
     "scripts/healthcheck.py": "d0efd74b21ffddf97c2f96fbaed07c26425f98cbf1ec1d25563e451d4d1e497c",
     "scripts/start.sh": "e7d0a4a2659651a9b0f04cf3cb454037704ccee35fa734966a7e48bc9ec690cd",
-    "scripts/verify-image.sh": "61725889c7e9239892b95ad6ad73777127d4dc9243662e125f37b1275e9784a0",
+    "scripts/verify-image.sh": "f3c8e03099e2b044374e42a5fa8a6277bc6ff3984c36c3e16b9f6239426d8577",
     "supervisord.conf": "8d36bd74b86bef1b042b2bf487c4237e42c141efc35565b327687a5e8d49826a",
-    "tests/test_deployment.py": "bed8c3067e5e3597a8e00267999771c610240ea860e51d7607f6eb37d9dd8b32"
+    "tests/test_deployment.py": "af1cca873640f419b00de1dbd39eee2b7dbcd6c35117ed868960989589c18615"
   }
 }

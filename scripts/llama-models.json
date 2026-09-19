@@ -1,22 +1,69 @@
 {
-  "chat": {
-    "repository": "ggml-org/Qwen3.6-35B-A3B-GGUF",
-    "revision": "baec3ebee244827cda0f4557eafa8b28f7545fa6",
-    "license": "Apache-2.0 (Qwen3.6)",
-    "alias": "qwen3.6-35b-a3b",
-    "files": [
-      {
-        "path": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
-        "size": 20419565568,
-        "sha256": "671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7"
+  "default": "qwen3.8-flash-next",
+  "variants": {
+    "qwen3.8-flash-next": {
+      "alias": "qwen3.8-flash-next",
+      "license": "https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/LICENSE",
+      "note": "177B UD-IQ3_XXS (82 GB) + shared Q8 MTP draft head. Needs ~82 GB VRAM-class GPU; geometry matches the original Codacus recipe defaults.",
+      "context": 4096,
+      "batch": 512,
+      "ubatch": 512,
+      "cache_size": 56,
+      "repository": "unsloth/Qwen3.8-Flash-Next-GGUF",
+      "revision": "38bb39ee97821de2c9009abb7e93950eec396e66",
+      "files": [
+        {
+          "path": "UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf",
+          "size": 10946624,
+          "sha256": "268f81fdedf3149a538f252308927a4d5d1f6e062c178568a51e3b519744f8a8"
+        },
+        {
+          "path": "UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00002-of-00003.gguf",
+          "size": 49567921344,
+          "sha256": "cfe600b236b88c7fad1613a5ca5e83b9f2beb63cbd44c32b2be50a44747c695f"
+        },
+        {
+          "path": "UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00003-of-00003.gguf",
+          "size": 32382955968,
+          "sha256": "f1912ba34c79427d2295a58dcb2b732b5931af5bef7a373c60557a57d9ee7250"
+        }
+      ],
+      "draft": {
+        "repository": "unsloth/Qwen3.8-Flash-Next-GGUF",
+        "revision": "38bb39ee97821de2c9009abb7e93950eec396e66",
+        "files": [
+          {
+            "path": "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf",
+            "size": 2786568256,
+            "sha256": "5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6"
+          }
+        ]
       }
-    ]
+    },
+    "qwen3.6-35b-a3b": {
+      "alias": "qwen3.6-35b-a3b",
+      "license": "Apache-2.0 (Qwen3.6)",
+      "note": "16GB-VRAM-guide model: 20.4 GB Q4_K_M with CUDA MoE expert cache. Needs >=32 GB system RAM (load-mode none).",
+      "context": 65536,
+      "batch": 8192,
+      "ubatch": 8192,
+      "cache_size": 96,
+      "repository": "ggml-org/Qwen3.6-35B-A3B-GGUF",
+      "revision": "baec3ebee244827cda0f4557eafa8b28f7545fa6",
+      "files": [
+        {
+          "path": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+          "size": 20419565568,
+          "sha256": "671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7"
+        }
+      ]
+    }
   },
   "embedding": {
+    "alias": "nomic-embed-text",
+    "license": "Apache-2.0",
     "repository": "nomic-ai/nomic-embed-text-v1.5-GGUF",
     "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
-    "license": "Apache-2.0",
-    "alias": "nomic-embed-text",
     "files": [
       {
         "path": "nomic-embed-text-v1.5.f16.gguf",
