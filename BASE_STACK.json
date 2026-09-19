@@ -7,12 +7,12 @@
     ".dockerignore": "969dfd0912cc0c0c953498b26afe5f613151b7e193dec85f7f03068828a103e5",
     ".gitignore": "a3c0c767d112efa9756e303df118fd0bd757f90da20e6f6db49761799825deba",
     "DEPLOY.md": "7d9d55714e2802859f5472d1763db7235b42f6eedd9f45415d148a5262d1096e",
-    "Dockerfile": "c39593e3c47c46863cf315c827bdce29f43e9218155c38b9cf1808799b4c3615",
+    "Dockerfile": "5cc184ac6a757d3c2b304b4829990a1da1c050e07e654556cf32a44bd49dbba4",
     "runtime.env.example": "53727eb6f1b4199ab0c8b97f3d5966a63760ad54fcdd975131a13dd059c156c2",
     "scripts/build.sh": "0a209ac7cded5196cafec4bd0f32a71360e66d849e6842b66d9b8d026fafa3ac",
     "scripts/healthcheck.py": "d0efd74b21ffddf97c2f96fbaed07c26425f98cbf1ec1d25563e451d4d1e497c",
     "scripts/start.sh": "e7d0a4a2659651a9b0f04cf3cb454037704ccee35fa734966a7e48bc9ec690cd",
-    "scripts/verify-image.sh": "f3c8e03099e2b044374e42a5fa8a6277bc6ff3984c36c3e16b9f6239426d8577",
+    "scripts/verify-image.sh": "f2132670a8c3909873ae0dfb05f9f6306228fedfd1edf7ac17217f2465d6d403",
     "supervisord.conf": "03833a5ad7bcd0b9fb93f79d992ca3c8700c5e10ce849449d71d5bd28e7671ad",
     "tests/test_deployment.py": "e0aa4b6de0d5b29b9cf1bf226f1cf6712f51f2cfccc5c4edb48f4f4411779244"
   }

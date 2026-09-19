@@ -34,7 +34,7 @@ from pathlib import Path
 assert Path('/opt/llama.cpp/REVISION').read_text().strip() == json.loads(Path('/opt/praxis/LLAMA_CPP.json').read_text())['commit']
 c=configparser.ConfigParser(interpolation=None)
 c.read('/etc/supervisor/praxis.conf')
-assert {s for s in c if s.startswith('program:')} == {'program:'+p for p in ['netbird','llama-chat','llama-proxy','llama-embedding']}
+assert {s for s in c if s.startswith('program:')} == {'program:'+p for p in ['netbird','gpu-agent','llama-chat','llama-proxy','llama-embedding']}
 for kind in ['chat','embedding']:
     assert c['program:llama-'+kind]['autorestart']=='false'
     assert c['program:llama-'+kind]['startretries']=='0'
