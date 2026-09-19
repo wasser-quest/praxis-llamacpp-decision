@@ -45,7 +45,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(setup['startsecs'], '0')
             self.assertEqual(setup['startretries'], '0')
             self.assertIn('run_llama.py ' + kind, setup['command'])
-        names = ['netbird', 'llama-chat', 'llama-embedding', 'llama-proxy']
+        names = ['netbird', 'gpu-agent', 'llama-chat', 'llama-embedding', 'llama-proxy']
         self.assertEqual({s for s in c if s.startswith('program:')}, {'program:' + n for n in names})
         for name in names:
             self.assertEqual(c['program:' + name]['stopasgroup'], 'true')

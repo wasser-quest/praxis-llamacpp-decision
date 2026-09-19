@@ -40,6 +40,15 @@ COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp
 RUN printf '/opt/llama.cpp/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
 COPY LLAMA_CPP.json /opt/praxis/LLAMA_CPP.json
 COPY scripts /opt/praxis/bin
+# pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image)
+# + Call-home-Env. Am Stage-Ende, damit Layer-Cache bleibt.
+ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
+COPY --from=${PGPU_IMAGE} /gpu-agent /opt/praxis/bin/gpu-agent
+ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=llm \
+    ROUTER_URL= PRAXIS_NODE_TOKEN= \
+    PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:11434/health,http://127.0.0.1:11436/health \
+    PRAXIS_AGENT_MODEL_DIR=/workspace/llama.cpp/models \
+    PRAXIS_AGENT_ACCEPTANCE_CMD=/usr/bin/python3 /opt/praxis/bin/acceptance_llama.py --run
 COPY supervisord.conf /etc/supervisor/praxis.conf
 RUN chmod +x /opt/praxis/bin/*.sh \
     && /opt/llama.cpp/bin/llama-server --help > /tmp/llama-help.txt \
