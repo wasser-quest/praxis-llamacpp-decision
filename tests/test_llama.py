@@ -115,7 +115,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_manifest_pins_both_variants_and_independent_nomic_weights(self):
         manifest = config.models()
-        for name in ('qwen3.8-flash-next', 'qwen3.6-35b-a3b'):
+        for name in ('qwen3.8-flash-next', 'qwen3.6-35b-a3b', 'qwen3.8-27b'):
             self.assertIn(name, manifest['variants'])
         flash = manifest['variants']['qwen3.8-flash-next']
         self.assertEqual(len(flash['files']), 3)
@@ -130,6 +130,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(qwen36['files'][0]['sha256'],
                          '671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7')
         self.assertNotIn('draft', qwen36)
+        qwen27 = manifest['variants']['qwen3.8-27b']
+        self.assertEqual(qwen27['files'][0]['size'], 16464440224)
+        self.assertEqual(qwen27['files'][0]['sha256'],
+                         '322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482')
+        self.assertEqual(qwen27['draft']['files'][0]['size'], 1369590656)
+        self.assertEqual(qwen27['cache_size'], 0)
         for name, variant in manifest['variants'].items():
             self.assertRegex(variant['revision'], r'^[0-9a-f]{40}$')
             for entry in variant['files']:

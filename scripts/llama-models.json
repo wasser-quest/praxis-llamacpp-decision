@@ -57,6 +57,35 @@
           "sha256": "671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7"
         }
       ]
+    },
+    "qwen3.8-27b": {
+      "alias": "qwen3.8-27b",
+      "license": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/LICENSE",
+      "note": "Dense 27B UD-Q4_K_M (16.5 GB) + shared Q4_0 MTP draft head (1.4 GB). Needs a 24 GB VRAM-class GPU; no MoE experts, so cache_size stays 0.",
+      "context": 8192,
+      "batch": 1024,
+      "ubatch": 1024,
+      "cache_size": 0,
+      "repository": "unsloth/Qwen3.8-27B-GGUF",
+      "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+      "files": [
+        {
+          "path": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+          "size": 16464440224,
+          "sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482"
+        }
+      ],
+      "draft": {
+        "repository": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+        "files": [
+          {
+            "path": "MTP/mtp-Qwen3.8-27B-Q4_0.gguf",
+            "size": 1369590656,
+            "sha256": "50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e"
+          }
+        ]
+      }
     }
   },
   "embedding": {

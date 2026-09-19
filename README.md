@@ -12,6 +12,9 @@ llama.cpp, following the owner's [16GB VRAM Setup](https://github.com/GenerelSch
     177B MoE; needs an ~82 GB VRAM-class GPU. Geometry: 4096 ctx / 512 batch /
     ubatch / 56 expert-cache slots. This is the model that works (the original
     stack's recipe, now on the GenerelSchwerz moe-cache fork with draft-mtp).
+  - **`qwen3.8-27b`** — `unsloth/Qwen3.8-27B-GGUF` UD-Q4_K_M (16.5 GB) + shared
+    Q4_0 MTP draft head (1.4 GB). Dense 27B, 8K ctx / 1024 batch, cache off.
+    Needs a 24 GB VRAM-class GPU (e.g. RTX 3090).
   - **`qwen3.6-35b-a3b`** — `ggml-org/Qwen3.6-35B-A3B-GGUF` Q4_K_M, one 20.4 GB
     GGUF, **16 GB VRAM guide** model with CUDA MoE expert cache:
     `LLAMA_MOE_CACHE_SIZE=96` (cache 132 measured 14,369 MiB peak on the
