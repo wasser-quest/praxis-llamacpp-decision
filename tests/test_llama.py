@@ -13,53 +13,44 @@ from unittest.mock import call, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import llama_config as config
 import provision_llama as provision
-import profile_llama as profile
 import run_llama as runner
-
-
-def csv_data(position=0):
-    return f'{position},0,' + ','.join(str(i) for i in range(10)) + '\n'
 
 
 class ConfigTests(unittest.TestCase):
     @patch.object(config, 'physical_thread_count', return_value=6)
-    def test_flash_recipe_uses_codacus_not_other_fork_flags(self, detect):
+    def test_guide_recipe_uses_generelschwerz_not_other_fork_flags(self, detect):
         args = config.server_command('chat', {})
         detect.assert_called_once_with()
         for key, value in [('--threads', '6'), ('--threads-batch', '6'),
-                           ('--spec-draft-threads', '6'), ('--spec-draft-threads-batch', '6'),
-                           ('--moe-cache-slots', '56'), ('--verbosity', '4'),
-                           ('--spec-type', 'draft-mtp'), ('--spec-draft-ngl', '99'), ('--spec-draft-n-max', '2'),
                            ('--n-cpu-moe', '99'), ('--n-gpu-layers', '99'),
-                           ('--flash-attn', 'on'), ('--load-mode', 'mmap'), ('--lazy-mode', 'on'),
+                           ('--flash-attn', 'on'), ('--fit', 'off'), ('--load-mode', 'none'),
+                           ('--cache-type-k', 'f16'), ('--cache-type-v', 'f16'),
+                           ('--ctx-size', '65536'), ('--batch-size', '8192'), ('--ubatch-size', '8192'),
+                           ('--cache-ram', '0'), ('--moe-expert-cache-size', '96'),
                            ('--host', '127.0.0.1'), ('--port', '11435'), ('--parallel', '1')]:
-            self.assertEqual(args[args.index(key) + 1], value)
-        self.assertIn('--jinja', args)
-        self.assertNotIn('--moe-expert-cache-size', args)
-        self.assertEqual(args[args.index('--spec-draft-model') + 1],
-                         '/workspace/llama.cpp/models/qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf')
-        self.assertIn('UD-IQ3_XXS-00001-of-00003.gguf', ' '.join(args))
+            self.assertEqual(args[args.index(key) + 1], value, key)
+        for key in ['--kv-offload', '--jinja', '--no-slots', '--no-warmup']:
+            self.assertIn(key, args)
+        for key in ['--spec-type', '--spec-draft-model', '--spec-draft-ngl', '--moe-cache-slots',
+                    '--moe-cache-profile', '--verbosity', '--lazy-mode']:
+            self.assertNotIn(key, args)
+        self.assertIn('Qwen3.6-35B-A3B-Q4_K_M.gguf', ' '.join(args))
 
-    def test_mtp_directory_is_independent_and_head_cannot_be_served_alone(self):
-        env = {'LLAMA_MODEL_DIR': '/models/trunk', 'LLAMA_MTP_MODEL_DIR': '/models/draft'}
-        args = config.server_command('chat', env)
-        self.assertEqual(args[args.index('--spec-draft-model') + 1],
-                         '/models/draft/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf')
-        self.assertEqual(config.model_dir('chat', env), Path('/models/trunk'))
-        self.assertEqual(config.model_dir('mtp', env), Path('/models/draft'))
+    def test_cache_size_is_a_tunable_disable_and_only_chat_embedding_serve(self):
+        args = config.server_command('chat', {'LLAMA_MOE_CACHE_SIZE': '48'})
+        self.assertEqual(args[args.index('--moe-expert-cache-size') + 1], '48')
+        args = config.server_command('chat', {'LLAMA_MOE_CACHE_SIZE': '0'})
+        self.assertEqual(args[args.index('--moe-expert-cache-size') + 1], '0')
         with self.assertRaises(ValueError):
-            config.server_command('mtp', env)
+            config.server_command('mtp', {})
 
     def test_auto_and_unset_apply_detected_count_to_all_cpu_worker_pools(self):
         with patch.object(config, 'physical_thread_count', return_value=12):
             for env in [{}, {'LLAMA_THREADS': 'auto'}]:
                 for kind in ['chat', 'embedding']:
                     args = config.server_command(kind, env)
-                    keys = ['--threads', '--threads-batch']
-                    if kind == 'chat':
-                        keys += ['--spec-draft-threads', '--spec-draft-threads-batch']
-                    for key in keys:
-                        self.assertEqual(args[args.index(key) + 1], '12')
+                    self.assertEqual(args[args.index('--threads') + 1], '12')
+                    self.assertEqual(args[args.index('--threads-batch') + 1], '12')
 
     def test_numeric_thread_override_does_not_require_topology(self):
         with patch.object(config, 'physical_thread_count', side_effect=AssertionError('must not detect')) as detect:
@@ -71,51 +62,39 @@ class ConfigTests(unittest.TestCase):
 
     def test_boolean_zero_removes_presence_based_host_pinning(self):
         self.assertEqual(config.child_environment({})['GGML_CUDA_REGISTER_HOST'], '1')
-        child = config.child_environment({'GGML_CUDA_REGISTER_HOST': '0', 'GGML_SCHED_PREFETCH_EXPERTS': '0'})
+        child = config.child_environment({'GGML_CUDA_REGISTER_HOST': '0'})
         self.assertNotIn('GGML_CUDA_REGISTER_HOST', child)
-        self.assertNotIn('GGML_SCHED_PREFETCH_EXPERTS', child)
-
-    def test_unsafe_prefetch_is_removed_even_from_old_template_environments(self):
-        for value in ['0', '1']:
-            env = {'GGML_SCHED_PREFETCH_EXPERTS': value}
-            self.assertEqual(config.settings(env)['prefetch_requested'], value == '1')
-            child = config.child_environment(env)
-            self.assertNotIn('GGML_SCHED_PREFETCH_EXPERTS', child)
-            self.assertEqual(child['GGML_CUDA_REGISTER_HOST'], '1')
-            self.assertEqual(env['GGML_SCHED_PREFETCH_EXPERTS'], value)
-        self.assertNotIn('GGML_CUDA_DISABLE_GRAPHS', config.child_environment({}))
 
     def test_invalid_and_legacy_settings_rejected(self):
         for env in [{'LLAMA_THREADS': '0'}, {'LLAMA_THREADS': '1; echo nope'},
                     {'LLAMA_THREADS': ''}, {'LLAMA_THREADS': '513'}, {'LLAMA_THREADS': 'AUTO'},
-                    {'LLAMA_MOE_CACHE_SLOTS': '513'}, {'LLAMA_DOWNLOAD_MODELS': 'yes'},
-                    {'GGML_SCHED_PREFETCH_EXPERTS': 'yes'},
+                    {'LLAMA_MOE_CACHE_SIZE': '1025'}, {'LLAMA_DOWNLOAD_MODELS': 'yes'},
+                    {'LLAMA_MODEL_DIR': '/tmp/../secret'},
+                    # Old Codacus/Flash recipe variables must fail closed, never silently drift.
+                    {'LLAMA_MOE_CACHE_SLOTS': '56'}, {'LLAMA_MOE_CACHE_PROFILE': 'merged.csv'},
+                    {'LLAMA_MTP_MODEL_DIR': '/models/draft'}, {'LLAMA_GENERATE_PROFILE': '1'},
+                    {'GGML_SCHED_PREFETCH_EXPERTS': '1'},
                     {'OLLAMA_MODEL': 'qwen3.8:27b'}, {'LLAMA_ARG_HOST': '0.0.0.0'},
-                    {'GGML_MOE_CACHE_SLOTS': '112'}, {'LLAMA_UBATCH_SIZE': '1024'},
-                    {'LLAMA_MODEL_DIR': '/tmp/../secret'}, {'LLAMA_MTP_MODEL_DIR': 'relative'},
-                    {'LLAMA_MTP_MODEL_DIR': '/tmp/../secret'}, {'LLAMA_MOE_CACHE_PROFILE': 'relative.csv'}]:
+                    {'GGML_MOE_CACHE_SLOTS': '112'}]:
             with self.subTest(env=env), self.assertRaises(ValueError):
                 config.server_command('chat', env)
 
-    def test_embedding_keeps_own_context_without_mtp_or_gpu_cache(self):
+    def test_embedding_keeps_own_context_without_cache_or_drafting(self):
         args = config.server_command('embedding', {'LLAMA_CONTEXT_SIZE': '262144'})
         for key, value in [('--ctx-size', '2048'), ('--port', '11436'), ('--device', 'none'), ('--pooling', 'mean')]:
             self.assertEqual(args[args.index(key) + 1], value)
         self.assertIn('--embedding', args)
-        self.assertNotIn('--spec-type', args)
+        self.assertNotIn('--moe-expert-cache-size', args)
         self.assertNotIn('--spec-draft-model', args)
-        self.assertNotIn('--moe-cache-slots', args)
 
-    def test_pins_have_all_shards_and_independent_nomic_weights(self):
+    def test_pins_have_the_single_16gb_gguf_and_independent_nomic_weights(self):
         models = config.models()
-        self.assertEqual(len(models['chat']['files']), 3)
-        self.assertEqual(sum(f['size'] for f in models['chat']['files']), 81961823936)
-        self.assertEqual(models['mtp']['repository'], models['chat']['repository'])
-        self.assertEqual(models['mtp']['revision'], models['chat']['revision'])
-        self.assertEqual(len(models['mtp']['files']), 1)
-        self.assertEqual(models['mtp']['files'][0]['size'], 2786568256)
-        self.assertEqual(models['mtp']['files'][0]['sha256'],
-                         '5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6')
+        self.assertEqual(len(models['chat']['files']), 1)
+        chat = models['chat']['files'][0]
+        self.assertEqual(chat['path'], 'Qwen3.6-35B-A3B-Q4_K_M.gguf')
+        self.assertEqual(chat['size'], 20419565568)
+        self.assertEqual(chat['sha256'], '671e47e0ec53c665d048b98c3ecbfd5236b5ca9c3e02ed19fc8f81f7b85140c7')
+        self.assertNotIn('mtp', models)
         for model in models.values():
             self.assertRegex(model['revision'], r'^[0-9a-f]{40}$')
             for entry in model['files']:
@@ -129,29 +108,29 @@ class InstanceTuningTests(unittest.TestCase):
         patcher = patch.object(config, 'RUNTIME_SETTINGS', self.path)
         patcher.start(); self.addCleanup(patcher.stop)
 
-    def test_persistent_context_overrides_old_supervisor_env_and_keeps_embeddings_separate(self):
-        env = {'LLAMA_CONTEXT_SIZE': '4096'}
-        self.assertEqual(config.settings(env)['context'], 4096)
-        self.path.write_text('{"LLAMA_CONTEXT_SIZE":32768}')
-        self.assertEqual(config.settings(env)['context'], 32768)
-        self.assertEqual(config.child_environment(env)['LLAMA_CONTEXT_SIZE'], '32768')
+    def test_persistent_cache_tuning_overrides_supervisor_env_and_keeps_embeddings_separate(self):
+        env = {'LLAMA_MOE_CACHE_SIZE': '96'}
+        self.assertEqual(config.settings(env)['cache_size'], 96)
+        self.path.write_text('{"LLAMA_MOE_CACHE_SIZE":132}')
+        self.assertEqual(config.settings(env)['cache_size'], 132)
+        self.assertEqual(config.child_environment(env)['LLAMA_MOE_CACHE_SIZE'], '132')
         chat = config.server_command('chat', env)
         embedding = config.server_command('embedding', env)
-        self.assertEqual(chat[chat.index('--ctx-size') + 1], '32768')
+        self.assertEqual(chat[chat.index('--moe-expert-cache-size') + 1], '132')
         self.assertEqual(embedding[embedding.index('--ctx-size') + 1], '2048')
-        self.assertEqual(env, {'LLAMA_CONTEXT_SIZE': '4096'})
+        self.assertEqual(env, {'LLAMA_MOE_CACHE_SIZE': '96'})
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)):
             receipt = {'pid': os.getpid(), 'process': runner.process_identity(os.getpid()),
                        'command': runner.command_digest(chat), 'cache_active': True}
             (Path(d) / 'chat.json').write_text(json.dumps(receipt))
             self.assertTrue(runner.runtime_ready('chat', env))
-            self.path.write_text('{"LLAMA_CONTEXT_SIZE":16384}')
+            self.path.write_text('{"LLAMA_MOE_CACHE_SIZE":48}')
             self.assertFalse(runner.runtime_ready('chat', env))
 
     def test_unknown_keys_unsafe_values_and_symlinks_fail_closed(self):
         for value in ['{"NB_SETUP_KEY":"not-a-key"}', '{"LLAMA_DOWNLOAD_MODELS":1}',
-                      '{"LLAMA_CONTEXT_SIZE":true}', '{"LLAMA_CONTEXT_SIZE":0}',
-                      '{"LLAMA_CONTEXT_SIZE":262145}', '{"LLAMA_CONTEXT_SIZE":[]}',
+                      '{"LLAMA_MOE_CACHE_SIZE":true}', '{"LLAMA_MOE_CACHE_SIZE":-1}',
+                      '{"LLAMA_MOE_CACHE_SIZE":1025}', '{"LLAMA_MOE_CACHE_SIZE":[]}',
                       '{"LLAMA_THREADS":"1; touch /tmp/not-executed"}', '[]', 'invalid', ' ' * 4097]:
             self.path.write_text(value)
             with self.subTest(value=value[:80]), self.assertRaises((ValueError, OSError)):
@@ -169,9 +148,9 @@ class DownloadTests(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.env = {'LLAMA_MODEL_DIR': str(self.directory)}
         self.data = b'GGUFtest-fixture'
-        self.entry = {'path': 'UD-IQ3_XXS/test.gguf', 'size': len(self.data), 'sha256': hashlib.sha256(self.data).hexdigest()}
+        self.entry = {'path': 'Qwen3.6-35B-A3B-Q4_K_M.gguf', 'size': len(self.data), 'sha256': hashlib.sha256(self.data).hexdigest()}
         self.model = {'repository': 'owner/model', 'revision': 'a'*40, 'files': [self.entry]}
-        self.target = self.directory / 'test.gguf'
+        self.target = self.directory / self.entry['path']
         self.patcher = patch.object(provision, 'models', return_value={'chat': self.model})
         self.patcher.start(); self.addCleanup(self.patcher.stop)
 
@@ -191,7 +170,7 @@ class DownloadTests(unittest.TestCase):
         with patch.object(provision.OPENER, 'open', return_value=self.response()) as request:
             provision.provision('chat', self.env, download=True)
             self.assertEqual(self.target.read_bytes(), self.data)
-            self.assertIn('/resolve/' + 'a'*40 + '/UD-IQ3_XXS/test.gguf', request.call_args.args[0])
+            self.assertIn('/resolve/' + 'a'*40 + '/Qwen3.6-35B-A3B-Q4_K_M.gguf', request.call_args.args[0])
         with patch.object(provision.OPENER, 'open') as request:
             provision.provision('chat', self.env, download=True)
             request.assert_not_called()
@@ -244,141 +223,68 @@ class DownloadTests(unittest.TestCase):
                 provision.provision('chat', self.env, download=True)
 
 
-class ProfileTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.target = Path(self.temp.name) / 'merged.csv'
-        self.env = {'LLAMA_MOE_CACHE_PROFILE': str(self.target)}
-
-    def fake_trace(self, command, **kwargs):
-        self.assertEqual(command[0], '/opt/llama.cpp/bin/llama-moe-trace')
-        self.assertEqual(command[command.index('--predict')+1], '512')
-        self.assertEqual(command[command.index('--ctx-size')+1], '4096')
-        self.assertEqual(command[command.index('--threads')+1], '4')
-        self.assertEqual(command[command.index('--threads-batch')+1], '4')
-        self.assertNotIn('--moe-cache-profile', command)
-        Path(kwargs['env']['MOE_TRACE_OUT']).write_text(csv_data())
-
-    def test_two_workloads_merge_once_and_restart_reuses_profile(self):
-        with patch.object(config, 'physical_thread_count', return_value=4), \
-                patch.object(profile.subprocess, 'run', side_effect=self.fake_trace) as trace:
-            profile.ensure_profile(self.env, generate=True)
-            self.assertEqual(trace.call_count, 2)
-            prompts = [call.args[0][-1] for call in trace.call_args_list]
-            self.assertNotEqual(prompts[0], prompts[1])
-        self.assertEqual(self.target.read_text(), csv_data() * 2)
-        with patch.object(profile.subprocess, 'run') as trace:
-            profile.ensure_profile(self.env, generate=True)
-            trace.assert_not_called()
-
-    def test_missing_profile_never_silently_serves_baseline(self):
-        with self.assertRaisesRegex(RuntimeError, 'Missing routing profile'):
-            profile.ensure_profile(self.env)
-
-    def test_existing_profile_needs_explicit_adoption(self):
-        self.target.write_text(csv_data())
-        with self.assertRaisesRegex(RuntimeError, 'unverified'):
-            profile.ensure_profile(self.env, generate=True)
-        profile.ensure_profile(self.env, adopt=True)
-        profile.ensure_profile(self.env)
-        self.target.write_text(csv_data(1))
-        with self.assertRaisesRegex(RuntimeError, 'unverified'):
-            profile.ensure_profile(self.env)
-
-    def test_bad_or_prefill_only_profiles_fail(self):
-        for data in ['', csv_data(-1), '0,0,1\n', csv_data().replace(',9', ',512'), csv_data().replace(',9', ',8')]:
-            self.target.write_text(data)
-            with self.subTest(data=data), self.assertRaises(RuntimeError):
-                profile.validate_profile(self.target)
-
-    def test_failed_trace_is_not_published_or_retried(self):
-        with patch.object(profile.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'trace')) as trace:
-            with self.assertRaises(subprocess.CalledProcessError):
-                profile.ensure_profile(self.env, generate=True)
-            self.assertEqual(trace.call_count, 1)
-        self.assertFalse(self.target.exists())
-
-
 class RuntimeTests(unittest.TestCase):
-    def test_cache_activation_and_fallback(self):
-        self.assertTrue(runner.cache_active('init_moe_expert_cache: expert cache: 40 layers x 56 slots, 8164.00 MiB uploaded to CUDA0', 56))
-        self.assertFalse(runner.cache_active('model loaded; no cache message', 56))
-        for line in ['pack allocation failed - expert cache disabled', 'no CPU-resident MoE layers',
-                     'expert cache: 40 layers x 112 slots, 8164.00 MiB uploaded to CUDA0']:
-            with self.assertRaises(RuntimeError): runner.cache_active(line, 56)
+    def test_cache_activation_requires_the_moe_cache_pool_line(self):
+        self.assertTrue(runner.cache_active('moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (96 slots x 0.44 MiB)'))
+        self.assertFalse(runner.cache_active('model loaded; no cache message'))
+        self.assertFalse(runner.cache_active('expert cache: 40 layers x 56 slots, 8164.00 MiB uploaded to CUDA0'))
 
     def test_no_cuda_refuses_cpu_chat_fallback(self):
         with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'Available devices:\n', '')):
             with self.assertRaisesRegex(RuntimeError, 'No CUDA device'): runner.require_cuda({})
-        with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'Available devices:\n  CUDA0: NVIDIA RTX 3060\n', '')):
+        with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'Available devices:\n  CUDA0: NVIDIA RTX 5060 Ti\n', '')):
             runner.require_cuda({})
 
-    def test_startup_env_drives_download_profile_and_mtp_launch(self):
+    def test_startup_env_drives_download_and_launch(self):
         from unittest.mock import MagicMock
         child = MagicMock()
         child.pid = os.getpid()
         child.stdout = io.StringIO(
-            'expert cache: 48 layers x 56 slots, 5350.00 MiB uploaded to CUDA0\n'
-            "common_speculative_init_result: loading draft model '/models/mtp.gguf'\n"
-            'init_moe_expert_cache: no CPU-resident MoE layers - expert cache not built\n')
+            'load_model: loading model\n'
+            'moe-cache: CUDA_MoE_Cache_Pool[blk.0.ffn_up_chexps] = 42.00 MiB  (96 slots x 0.44 MiB)\n')
         child.wait.return_value = 0
         child.poll.return_value = 0
-        env = {'LLAMA_DOWNLOAD_MODELS': '1', 'LLAMA_GENERATE_PROFILE': '1',
-               'GGML_SCHED_PREFETCH_EXPERTS': '1'}
+        env = {'LLAMA_DOWNLOAD_MODELS': '1'}
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
                 patch.object(runner, 'require_cuda') as cuda, \
                 patch.object(runner, 'provision') as download, \
-                patch.object(runner, 'ensure_profile') as trace, \
                 patch.object(runner.subprocess, 'Popen', return_value=child) as launch:
             self.assertEqual(runner.serve('chat', env), 0)
             cuda.assert_called_once_with(env)
-            self.assertEqual(download.call_args_list,
-                             [call('chat', env, download=True), call('mtp', env, download=True)])
-            trace.assert_called_once_with(env, generate=True)
-            self.assertIn('draft-mtp', launch.call_args.args[0])
-            self.assertNotIn('GGML_SCHED_PREFETCH_EXPERTS', launch.call_args.kwargs['env'])
+            self.assertEqual(download.call_args_list, [call('chat', env, download=True)])
+            self.assertIn('--moe-expert-cache-size', launch.call_args.args[0])
+            self.assertNotIn('--spec-draft-model', launch.call_args.args[0])
             self.assertEqual(launch.call_args.kwargs['env']['GGML_CUDA_REGISTER_HOST'], '1')
             self.assertFalse((Path(d) / 'chat.json').exists())
 
-    def test_draft_does_not_mask_missing_main_cache_activation(self):
+    def test_missing_cache_activation_fails_closed(self):
         from unittest.mock import MagicMock
         child = MagicMock(pid=os.getpid())
-        child.stdout = io.StringIO("common_speculative_init_result: loading draft model '/models/mtp.gguf'\n")
+        child.stdout = io.StringIO('load_model: loading model\nmodel loaded\n')
         child.poll.return_value = None
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
                 patch.object(runner, 'require_cuda'), patch.object(runner, 'provision'), \
-                patch.object(runner, 'ensure_profile'), \
                 patch.object(runner.subprocess, 'Popen', return_value=child):
-            with self.assertRaisesRegex(RuntimeError, 'not activated before MTP'):
+            with self.assertRaisesRegex(RuntimeError, 'No CUDA MoE expert-cache activation'):
                 runner.serve('chat', {})
             child.terminate.assert_called_once()
             self.assertFalse((Path(d) / 'chat.json').exists())
 
-    def test_missing_mtp_fails_before_profile_or_server_without_fallback(self):
+    def test_missing_model_fails_before_server_without_fallback(self):
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
                 patch.object(runner, 'require_cuda'), \
-                patch.object(runner, 'provision', side_effect=[None, RuntimeError('Missing pinned MTP')]) as download, \
-                patch.object(runner, 'ensure_profile') as trace, patch.object(runner.subprocess, 'Popen') as launch:
-            with self.assertRaisesRegex(RuntimeError, 'Missing pinned MTP'):
+                patch.object(runner, 'provision', side_effect=RuntimeError('Missing pinned GGUFs')) as download, \
+                patch.object(runner.subprocess, 'Popen') as launch:
+            with self.assertRaisesRegex(RuntimeError, 'Missing pinned GGUFs'):
                 runner.serve('chat', {})
-            self.assertEqual(download.call_args_list,
-                             [call('chat', {}, download=False), call('mtp', {}, download=False)])
-            trace.assert_not_called(); launch.assert_not_called()
+            self.assertEqual(download.call_args_list, [call('chat', {}, download=False)])
+            launch.assert_not_called()
 
     def test_disabled_embedding_does_not_download_or_launch(self):
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
                 patch.object(runner, 'provision') as download, patch.object(runner.subprocess, 'Popen') as launch:
             self.assertEqual(runner.serve('embedding', {'LLAMA_EMBEDDING_ENABLED': '0'}), 0)
             download.assert_not_called(); launch.assert_not_called()
-
-    def test_preparation_failure_does_not_launch_a_baseline_server(self):
-        with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)), \
-                patch.object(runner, 'require_cuda'), patch.object(runner, 'provision'), \
-                patch.object(runner, 'ensure_profile', side_effect=RuntimeError('bad profile')), \
-                patch.object(runner.subprocess, 'Popen') as launch:
-            with self.assertRaisesRegex(RuntimeError, 'bad profile'):
-                runner.serve('chat', {'LLAMA_GENERATE_PROFILE': '1'})
-            launch.assert_not_called()
 
     def test_readiness_is_bound_to_running_process_and_recipe(self):
         with tempfile.TemporaryDirectory() as d, patch.object(runner, 'STATE_DIR', Path(d)):
@@ -387,10 +293,9 @@ class RuntimeTests(unittest.TestCase):
                        'command': runner.command_digest(config.server_command('chat', {})), 'cache_active': True}
             path = Path(d) / 'chat.json'; path.write_text(json.dumps(receipt))
             self.assertTrue(runner.runtime_ready('chat', {}))
-            other_count = config.thread_count({}) % 512 + 1
-            with patch.object(config, 'physical_thread_count', return_value=other_count):
+            with patch.object(config, 'physical_thread_count', return_value=config.thread_count({}) % 512 + 1):
                 self.assertFalse(runner.runtime_ready('chat', {}))
-            self.assertFalse(runner.runtime_ready('chat', {'LLAMA_MOE_CACHE_SLOTS': '48'}))
+            self.assertFalse(runner.runtime_ready('chat', {'LLAMA_MOE_CACHE_SIZE': '48'}))
             receipt['cache_active'] = False; path.write_text(json.dumps(receipt))
             self.assertFalse(runner.runtime_ready('chat', {}))
             receipt['cache_active'] = True; receipt['process'] = ['stale', 'pid']; path.write_text(json.dumps(receipt))

@@ -11,22 +11,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import acceptance_llama as acceptance
 
 
-def generation(text, calls=None, accepted=1):
+def generation(text, calls=None):
     message = {'role': 'assistant', 'content': text}
     if calls is not None:
         message['tool_calls'] = calls
     return {'choices': [{'message': message, 'finish_reason': 'tool_calls' if calls else 'stop',
                          'logprobs': {'content': [{'logprob': -0.1}]}}],
-            'timings': {'draft_n': 2, 'draft_n_accepted': accepted}}
+            'timings': {}}
 
 
 class AcceptanceTests(unittest.TestCase):
-    def responses(self, accepted=1):
+    def responses(self):
         call = {'id': 'test-call', 'type': 'function',
                 'function': {'name': 'add_numbers', 'arguments': '{"a":17,"b":25}'}}
-        return [generation('Paris', accepted=accepted), generation('Berlin', accepted=accepted),
-                generation('', [call], accepted), generation('Das Ergebnis ist 42.', accepted=accepted),
-                generation('Bergsee, 42.', accepted=accepted), generation('56.', accepted=accepted)]
+        return [generation('Paris'), generation('Berlin'),
+                generation('', [call]), generation('Das Ergebnis ist 42.'),
+                generation('Bergsee, 42.'), generation('56.')]
 
     def transport(self, completions):
         remaining = iter(completions)
@@ -35,7 +35,7 @@ class AcceptanceTests(unittest.TestCase):
             if url.endswith('/health'):
                 return {'status': 'ok'}
             if url.endswith('/v1/models'):
-                return {'data': [{'id': 'qwen3.8-flash-next'}]}
+                return {'data': [{'id': 'qwen3.6-35b-a3b'}]}
             if url.endswith('/v1/embeddings'):
                 return {'data': [{'embedding': [0.25] * 768}]}
             self.assertTrue(url.endswith('/v1/chat/completions'))
@@ -44,11 +44,10 @@ class AcceptanceTests(unittest.TestCase):
             return next(remaining)
         return request
 
-    def test_multi_request_tool_long_prompt_and_mtp_acceptance(self):
+    def test_multi_request_tool_and_long_prompt_acceptance(self):
         with patch.object(acceptance, 'request', side_effect=self.transport(self.responses())) as request:
             report = acceptance.run('http://127.0.0.1:11434')
         self.assertEqual(report['status'], 'pass')
-        self.assertEqual(report['mtp_accepted_tokens'], 6)
         self.assertEqual(report['embedding_dimensions'], 768)
         calls = [c.args[1] for c in request.call_args_list if c.args[0].endswith('/v1/chat/completions')]
         self.assertEqual(len(calls), 6)
@@ -76,11 +75,6 @@ class AcceptanceTests(unittest.TestCase):
                 acceptance.run('http://127.0.0.1:11434', report=report)
         self.assertEqual(request.call_count, 3)  # health, catalog, first generation
         self.assertEqual(len(report['steps']), 1)
-
-    def test_loaded_mtp_without_accepted_tokens_is_not_enough(self):
-        with patch.object(acceptance, 'request', side_effect=self.transport(self.responses(accepted=0))):
-            with self.assertRaisesRegex(RuntimeError, 'accepted MTP'):
-                acceptance.run('http://127.0.0.1:11434')
 
     def test_public_or_credentialed_origins_are_rejected_before_requests(self):
         for base in ['https://example.com', 'http://8.8.8.8:11434', 'http://key@127.0.0.1:11434']:

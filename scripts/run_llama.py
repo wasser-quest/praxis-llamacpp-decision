@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""One startup attempt: verify/download, profile, then supervise the pinned llama-server.
+"""One startup attempt: verify/download, then supervise the pinned llama-server.
 
-Preparation failures are not restart-looped. Codacus cache fallback is fatal,
-not quietly accepted as a working optimized deployment.
+Preparation failures are not restart-looped. The 16 GB recipe treats a missing
+MoE expert-cache activation as fatal, not as a quietly accepted baseline.
 """
 import argparse
 import hashlib
@@ -15,11 +15,12 @@ import subprocess
 import sys
 
 from llama_config import BIN, child_environment, runtime_environment, server_command, settings
-from profile_llama import ensure_profile
 from provision_llama import atomic_json, provision, read_receipt
 
 STATE_DIR = Path('/workspace/llama.cpp/run')
-CACHE_LINE = re.compile(r'expert cache: (\d+) layers x (\d+) slots, [\d.]+ MiB uploaded to CUDA\d+')
+# GenerelSchwerz moe-cache prints one pool line per installed cached expert tensor:
+#   moe-cache: CUDA_MoE_Cache_Pool[<tensor>] = <MiB>  (<slots> slots x <MiB>)
+CACHE_LINE = re.compile(r'moe-cache: CUDA_MoE_Cache_Pool\[')
 
 
 def command_digest(command):
@@ -32,15 +33,8 @@ def process_identity(pid):
     return [Path('/proc/sys/kernel/random/boot_id').read_text().strip(), text.rsplit(')', 1)[1].split()[19]]
 
 
-def cache_active(line, slots):
-    if 'expert cache disabled' in line or 'no CPU-resident MoE layers' in line:
-        raise RuntimeError('Codacus expert cache fell back to baseline; inspect VRAM/profile and restart deliberately')
-    match = CACHE_LINE.search(line)
-    if match:
-        if int(match[1]) <= 0 or int(match[2]) != slots:
-            raise RuntimeError('Unexpected Codacus expert-cache activation')
-        return True
-    return False
+def cache_active(line):
+    return bool(CACHE_LINE.search(line))
 
 
 def runtime_ready(kind, env):
@@ -72,19 +66,11 @@ def serve(kind, env):
     mode = 'auto: physical cores, affinity and CPU quota' if runtime_environment(env).get('LLAMA_THREADS', 'auto') == 'auto' else 'manual override'
     print(f'llama.cpp {kind}: {config["threads"]} CPU worker threads ({mode})', flush=True)
     if kind == 'chat':
-        if config['prefetch_requested']:
-            print('WARNING: ignoring GGML_SCHED_PREFETCH_EXPERTS=1: experimental expert prefetch '
-                  'causes non-finite inference with this pinned Flash/cache recipe. '
-                  'CUDA expert cache and MTP remain enabled; update the old environment to 0.', flush=True)
         require_cuda(env)
     provision(kind, env, download=config['download'])
-    if kind == 'chat':
-        provision('mtp', env, download=config['download'])
-        ensure_profile(env, generate=config['generate_profile'])
     child = child_environment(env)
     if kind == 'embedding':
         child.pop('GGML_CUDA_REGISTER_HOST', None)
-        child.pop('GGML_SCHED_PREFETCH_EXPERTS', None)
     process = subprocess.Popen(command, env=child, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, errors='replace', bufsize=1)
     previous_handlers = {}
@@ -95,21 +81,14 @@ def serve(kind, env):
     try:
         if kind == 'embedding':
             atomic_json(state, receipt)
-        loading_draft = False
         for line in process.stdout:
             print(line, end='', flush=True)
-            if kind == 'chat' and 'common_speculative_init_result: loading draft model ' in line:
-                if not receipt['cache_active']:
-                    raise RuntimeError('Main model CUDA expert cache was not activated before MTP loading')
-                loading_draft = True
-            # The GPU-only MTP head inherits the fork's cache options but needs no
-            # CPU expert pack. Its "no CPU-resident MoE layers" is not a trunk fallback.
-            if kind == 'chat' and not loading_draft and cache_active(line, config['slots']):
+            if kind == 'chat' and cache_active(line) and not receipt['cache_active']:
                 receipt['cache_active'] = True
                 atomic_json(state, receipt)
         code = process.wait()
         if kind == 'chat' and not receipt['cache_active']:
-            raise RuntimeError('No CUDA expert-cache activation was reported')
+            raise RuntimeError('No CUDA MoE expert-cache activation was reported')
         return code
     finally:
         state.unlink(missing_ok=True)

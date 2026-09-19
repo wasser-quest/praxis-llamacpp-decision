@@ -11,7 +11,7 @@ else
   sudo -v
 fi
 "${engine[@]}" build --platform linux/amd64 --progress=plain \
-  --build-arg "CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH:-75;80;86;89;90;120}" \
+  --build-arg "CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH:-75;80;86;89;90;120;126;127}" \
   --build-arg "LLAMA_BUILD_JOBS=${LLAMA_BUILD_JOBS:-4}" \
   -t "$image" . 2>&1 | tee logs/build.log
 "${engine[@]}" image inspect "$image" --format '{{.Id}}'

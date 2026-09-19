@@ -1,9 +1,9 @@
 {
-  "repository": "https://github.com/thecodacus/llama.cpp",
-  "branch": "perf",
-  "commit": "27c54b4bbcefadedcec6397477cc2e866c1db716",
-  "reference": "https://www.youtube.com/watch?v=IH8XmxiwliQ",
-  "recipe": "Qwen3.8-Flash-Next 177B UD-IQ3_XXS; code+chat routing traces; 56 hot-expert slots; draft-mtp with the separately pinned shared Q8 MTP head (GPU, 2 draft tokens); host pinning on, experimental expert prefetch disabled after non-finite multi-request inference; one CPU worker per available physical core (auto, quota-aware)",
-  "video_reference_threads": 6,
-  "note": "Codacus perf, not FreeToken or GenerelSchwerz. Throughput in the upstream README is not a benchmark of this container."
+  "repository": "https://github.com/GenerelSchwerz/llama.cpp",
+  "branch": "moe-cache",
+  "commit": "907a73da9a149faa8c42ccde890f1d575586810f",
+  "reference": "https://github.com/GenerelSchwerz/llama.cpp/wiki/16GB-VRAM-Setup",
+  "recipe": "Qwen3.6-35B-A3B Q4_K_M (20.4 GB); CUDA MoE expert cache (96 slots/page as the measured starting point on 16 GB VRAM); F16 KV with KV offload; load-mode none, cache-ram 0, fit off, flash attention on; one CPU worker per available physical core (auto, quota-aware); Nomic embeddings on a second CPU llama-server",
+  "measured_reference": "Guide owner measured on RTX 5070 Ti 16 GB: cache 132 -> 14,369 MiB peak at NP1; cache 96 is the recommended start. 32 GB system RAM is the practical minimum; 62 GiB preferred.",
+  "note": "GenerelSchwerz moe-cache branch, not Codacus perf. Throughput in the upstream wiki is not a benchmark of this container."
 }

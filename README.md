@@ -1,25 +1,25 @@
-# praxis-llamap-gpu
+# praxis-llamap-gs-gpu-fork
 
-Separate GPU companion based on `praxis-gpu`. **Codacus's llama.cpp `perf` fork**
-replaces Ollama; **FreeToken is not installed or run**.
+16 GB VRAM llama.cpp chat/embedding companion for Praxis. Fork of
+`praxis-llamap-gpu` **stripped to the llama.cpp stack only** (no ComfyUI, no
+TTS, no Vosk) and rebuilt around **GenerelSchwerz's `moe-cache` branch** of
+llama.cpp, following the owner's [16GB VRAM Setup](https://github.com/GenerelSchwerz/llama.cpp/wiki/16GB-VRAM-Setup).
 
-- **Qwen3.8-Flash-Next 177B UD-IQ3_XXS**, all three pinned GGUF shards (~82 GB).
-- Codacus's **56-slot expert cache + `--spec-type draft-mtp`**, with the separately
-  pinned matching **shared Q8 MTP head (~2.8 GB)**. The main GGUFs contain no MTP layers.
-- **One CPU worker per available physical core**, auto-detected with affinity/cpuset
-  and CPU-quota limits (`LLAMA_THREADS=auto`); no SMT double-counting.
-- Host pinning stays on. Experimental expert prefetch is fenced off after
-  reproducible non-finite multi-request output; CUDA graphs and async CPU splits stay on.
-- Runtime env opts into automatic download, SHA256 verification, two one-time
-  code/chat routing traces (up to 512 generated tokens each), and merged-profile reuse.
-- Existing **Vosk DE/FR/JA, ComfyUI, XTTS, Qwen3-TTS, workflows and NetBird** retained.
-- **Speech provisioning is flag-gated** like the llama downloads: `PRAXIS_QWEN_TTS_DOWNLOAD=1`
-  fetches the pinned Qwen3-TTS Base model, `VOSK_DOWNLOAD_MODELS=1` fetches the
-  **large** Vosk de-0.21/fr-0.22/ja-0.22 models before the server starts.
-- Qwen3-TTS synthesis runs on measured-fastest **sdpa with torch.compile enabled**
-  (~2× per-token decode on RTX 3090); `flash_attention_2` stays an opt-in.
+- **Qwen3.6-35B-A3B Q4_K_M** (one pinned GGUF, ~20.4 GB) with the **CUDA MoE
+  expert cache**: routed experts live in a bounded GPU working set; cold experts
+  stream from system RAM on demand. `LLAMA_MOE_CACHE_SIZE=96` is the guide's
+  recommended start (cache 132 measured 14,369 MiB peak on the owner's
+  RTX 5070 Ti 16 GB).
+- Guide geometry: `-c 65536 -b 8192 -ub 8192`, F16 KV with KV offload,
+  `--load-mode none --cache-ram 0 -fit off -fa on --jinja`.
+- **32 GB system RAM is the practical minimum** for the 20.4 GB GGUF with
+  `--load-mode none`; 62 GiB+ preferred.
+- One CPU worker per available physical core, auto-detected with
+  affinity/cpuset and CPU-quota limits (`LLAMA_THREADS=auto`).
+- Runtime env opts into automatic download with SHA256 verification; verified
+  files are reused (`LLAMA_DOWNLOAD_MODELS=1`).
 - Nomic embeddings remain available through a second, CPU-only llama-server.
-- Same private VPN ports: **11434** (now OpenAI-compatible), **8188**, **2700**.
+- Private VPN port: **11434** (OpenAI-compatible, nginx origin guard).
 
 ```sh
 cp runtime.env.example runtime.env
@@ -27,27 +27,20 @@ chmod 600 runtime.env
 # Review model licenses and set NB_SETUP_KEY privately in runtime.env.
 bash scripts/build.sh
 bash scripts/verify-image.sh
-docker run -d --name praxis-llamap-gpu --gpus all \
-  --env-file runtime.env -v praxis-llamap-gpu-data:/workspace praxis-llamap-gpu:dev
+docker run -d --name praxis-llamap-gs-gpu --gpus all \
+  --env-file runtime.env -v praxis-llamap-gs-gpu-data:/workspace praxis-llamap-gpu:dev
 ```
 
-**No public port mappings.** The example enables `LLAMA_DOWNLOAD_MODELS=1` and
-`LLAMA_GENERATE_PROFILE=1`. First startup downloads weights and performs GPU
-profiling; subsequent starts reuse verified files. Speech model/reference
-provisioning stays as in the original stack.
+**No public port mappings.** First startup downloads ~20.4 GB of chat weights
+plus ~274 MB of embeddings and verifies pinned SHA256s; subsequent starts reuse
+verified files. Do not enable `--moe-expert-cache-size` on non-CUDA backends;
+the launcher refuses a CPU-only chat fallback.
 
-Read **[DEPLOY.md](DEPLOY.md)** for hardware sizing, reusing existing weights,
-Praxis client settings, maintenance, and acceptance tests. Source pins are in
-[`LLAMA_CPP.json`](LLAMA_CPP.json) and [`scripts/llama-models.json`](scripts/llama-models.json);
-[`BASE_STACK.json`](BASE_STACK.json) records the unchanged source stack.
+Source pins: [`LLAMA_CPP.json`](LLAMA_CPP.json) (GenerelSchwerz `moe-cache`
+commit) and [`scripts/llama-models.json`](scripts/llama-models.json) (GGUF pins).
+[`BASE_STACK.json`](BASE_STACK.json) records the remaining byte-identical base
+stack files. Run `python3 /opt/praxis/bin/acceptance_llama.py --run` against an
+idle, ready container for bounded multi-request API regression checks.
 
-**Validation:** offline tests plus GPU acceptance of the corrected launcher on an
-RTX A4000 16 GB: active 48-layer/56-slot cache, accepted MTP drafts, repeated chat,
-tool round trip, a 2,044-token prompt with finite probabilities, and Nomic embeddings.
-This is not a full-context/concurrency benchmark or a reproduction of the video's rate.
-The published `vayayo/praxis-llamap-gpu:0.2` predates these fixes; the deployed container
-was hotfixed. A new image build/verification/release is still required.
-
-Run `python3 /opt/praxis/bin/acceptance_llama.py --run` against an idle, ready container
-for bounded multi-request API regression checks. It does not restart services,
-download weights, retry failed generations or submit user data.
+See **[DEPLOY.md](DEPLOY.md)** for hardware sizing, VRAM tuning and operational
+notes.

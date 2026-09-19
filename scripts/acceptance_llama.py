@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in, bounded GPU API acceptance: repeated text, tools, long prompt, MTP and embeddings.
+"""Opt-in, bounded GPU API acceptance: repeated text, tools, long prompt and embeddings.
 
 Run only against an idle, ready private server. No downloads, service restarts,
 request retries, redirects or ambient proxies. Prompts are generic, not user data.
@@ -12,7 +12,7 @@ from pathlib import Path
 import time
 
 from llama_config import models
-from smoke import request, validate_base
+from private_http import request, validate_base
 
 
 def require(condition, message):
@@ -84,14 +84,11 @@ def run(base, timeout=300, report=None):
     # tokens, multiple prefill batches, non-greedy sampling, then another request.
     chat('long-prompt', [{'role': 'user', 'content': prompt}], ['Bergsee', '42'], temperature=0.3)
     chat('after-long-prompt', [{'role': 'user', 'content': 'Wie viel ist 7 mal 8? Antworte mit einem kurzen Satz.'}], ['56'])
-    accepted = sum(step['timings'].get('draft_n_accepted', 0) for step in report['steps'])
-    require(accepted > 0, 'No accepted MTP draft tokens were reported')
-
     embedding = request(base + '/v1/embeddings', {'model': models()['embedding']['alias'], 'input': 'search_query: Hallo Welt'}, deadline)
     vector = embedding['data'][0]['embedding']
     require(len(vector) == 768 and all(finite(x) for x in vector) and any(x != 0 for x in vector), 'Invalid embedding')
     require(request(base + '/health', deadline=deadline).get('status') == 'ok', 'Chat lost readiness')
-    report.update(status='pass', mtp_accepted_tokens=accepted, embedding_dimensions=len(vector))
+    report.update(status='pass', embedding_dimensions=len(vector))
     return report
 
 
