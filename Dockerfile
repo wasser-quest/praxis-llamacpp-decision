@@ -48,7 +48,7 @@ ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=llm \
     ROUTER_URL= PRAXIS_NODE_TOKEN= \
     PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:11434/health,http://127.0.0.1:11436/health \
     PRAXIS_AGENT_MODEL_DIR=/workspace/llama.cpp/models \
-    PRAXIS_AGENT_ACCEPTANCE_CMD=/usr/bin/python3 /opt/praxis/bin/acceptance_llama.py --run
+    PRAXIS_AGENT_ACCEPTANCE_CMD="/usr/bin/python3 /opt/praxis/bin/acceptance_llama.py --run"
 COPY supervisord.conf /etc/supervisor/praxis.conf
 RUN chmod +x /opt/praxis/bin/*.sh \
     && /opt/llama.cpp/bin/llama-server --help > /tmp/llama-help.txt \
