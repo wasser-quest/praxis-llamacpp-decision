@@ -22,6 +22,10 @@ RUN git init /src/llama.cpp && cd /src/llama.cpp \
     && find build -name '*.so*' -exec cp -P {} /opt/llama.cpp/bin/ \; \
     && cp LICENSE /opt/llama.cpp/LICENSE \
     && git rev-parse HEAD > /opt/llama.cpp/REVISION
+# pgpu: Router-Image liefert das statische gpu-agent-Artefakt (/gpu-agent).
+ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
+FROM ${PGPU_IMAGE} AS pgpu-agent-image
+
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04@sha256:17e2934e1fa96152b14f78078bfbafd0f00f391df995dc6c641a720fce1202bb
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
@@ -40,10 +44,9 @@ COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp
 RUN printf '/opt/llama.cpp/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
 COPY LLAMA_CPP.json /opt/praxis/LLAMA_CPP.json
 COPY scripts /opt/praxis/bin
-# pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image)
-# + Call-home-Env. Am Stage-Ende, damit Layer-Cache bleibt.
-ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
-COPY --from=${PGPU_IMAGE} /gpu-agent /opt/praxis/bin/gpu-agent
+# pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image).
+# --from kann keine Variablen → Alias-Stage oben definiert (ARG global).
+COPY --from=pgpu-agent-image /gpu-agent /opt/praxis/bin/gpu-agent
 ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=llm \
     ROUTER_URL= PRAXIS_NODE_TOKEN= \
     PRAXIS_AGENT_HEALTH_URLS=http://127.0.0.1:11434/health,http://127.0.0.1:11436/health \
