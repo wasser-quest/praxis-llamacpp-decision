@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1
+# pgpu: Router-Image (gpu-agent-Artefakt) — globaler ARG vor dem ersten FROM.
+ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
 FROM netbirdio/netbird:0.78.2-rootless@sha256:4a30e98bb0a98848c3b2a3ca4778cebfbe87d210f05b1f40288bb072d627c3fd AS netbird
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:a99a1860ba8e2916e5c3e73b72ec4c4301653a84586e05bfc9a2aa2d58027e97 AS llama-build
 ARG LLAMA_CPP_REV=907a73da9a149faa8c42ccde890f1d575586810f
@@ -23,7 +25,6 @@ RUN git init /src/llama.cpp && cd /src/llama.cpp \
     && cp LICENSE /opt/llama.cpp/LICENSE \
     && git rev-parse HEAD > /opt/llama.cpp/REVISION
 # pgpu: Router-Image liefert das statische gpu-agent-Artefakt (/gpu-agent).
-ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
 FROM ${PGPU_IMAGE} AS pgpu-agent-image
 
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04@sha256:17e2934e1fa96152b14f78078bfbafd0f00f391df995dc6c641a720fce1202bb
