@@ -2,7 +2,7 @@
 FROM netbirdio/netbird:0.78.2-rootless@sha256:4a30e98bb0a98848c3b2a3ca4778cebfbe87d210f05b1f40288bb072d627c3fd AS netbird
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:a99a1860ba8e2916e5c3e73b72ec4c4301653a84586e05bfc9a2aa2d58027e97 AS llama-build
 ARG LLAMA_CPP_REV=907a73da9a149faa8c42ccde890f1d575586810f
-ARG CUDA_DOCKER_ARCH=75;80;86;89;90;120;126;127
+ARG CUDA_DOCKER_ARCH=75;80;86;89;90;120
 ARG LLAMA_BUILD_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ca-certificates libssl-dev \

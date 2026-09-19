@@ -9,7 +9,7 @@ GenerelSchwerz `moe-cache` llama.cpp build, following the owner's
 
 - **GPU:** one NVIDIA GPU with ~16 GB VRAM (guide owner measured on
   RTX 5070 Ti, 16,303 MiB). The CUDA build targets
-  `CUDA_DOCKER_ARCH=75;80;86;89;90;120;126;127` (Ampere–Blackwell consumer).
+  `CUDA_DOCKER_ARCH=75;80;86;89;90;120` (Turing–Ampere–Ada + B200/5090; Blackwell consumer like 5060/5070 Ti needs CUDA 12.9+).
 - **VRAM at runtime:** cache 132 reached 14,369 MiB peak (NP1) / 14,675 MiB
   (NP4) on the owner card. `LLAMA_MOE_CACHE_SIZE=96` is the recommended start
   for mixed use or shared displays; raise/lower it per request geometry:
