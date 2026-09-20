@@ -9,6 +9,10 @@ ARG LLAMA_BUILD_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ca-certificates libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+# A parallel build that dies mid-way (killed compiler process, rare nvcc
+# flakiness on the fat mma/mmq template units) discards the ENTIRE RUN layer
+# — observed: 62 min gone at 68 % after an external kill. Retry incrementally
+# instead: cmake --build resumes at the dead TU and keeps earlier .o files.
 RUN git init /src/llama.cpp && cd /src/llama.cpp \
     && git remote add origin https://github.com/GenerelSchwerz/llama.cpp.git \
     && git fetch --depth 1 origin "$LLAMA_CPP_REV" && git checkout --detach FETCH_HEAD \
@@ -18,7 +22,12 @@ RUN git init /src/llama.cpp && cd /src/llama.cpp \
        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_DOCKER_ARCH" \
        -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
        -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
-    && cmake --build build --target llama-server --parallel "$LLAMA_BUILD_JOBS" \
+    && ( ok=0; \
+         for attempt in 1 2 3 4; do \
+           if cmake --build build --target llama-server --parallel "$LLAMA_BUILD_JOBS"; then ok=1; break; fi; \
+           echo "llama-server build attempt $attempt failed — incremental retry" >&2; \
+         done; \
+         test "$ok" = 1 ) \
     && mkdir -p /opt/llama.cpp/bin \
     && cp build/bin/llama-server /opt/llama.cpp/bin/ \
     && find build -name '*.so*' -exec cp -P {} /opt/llama.cpp/bin/ \; \
