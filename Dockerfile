@@ -9,10 +9,13 @@ ARG LLAMA_BUILD_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git ca-certificates libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-# A parallel build that dies mid-way (killed compiler process, rare nvcc
-# flakiness on the fat mma/mmq template units) discards the ENTIRE RUN layer
-# — observed: 62 min gone at 68 % after an external kill. Retry incrementally
-# instead: cmake --build resumes at the dead TU and keeps earlier .o files.
+# A parallel build that dies mid-way (flaky cicc segfaults — observed 3× on
+# 2026-09-20, kernel: null-deref at various IPs; the identical Dockerfile
+# built clean 16:02 the day before, so it is machine-state/timing dependent)
+# discards the ENTIRE RUN layer. Retry incrementally instead: cmake --build
+# resumes at the dead TU, and each attempt de-escalates parallelism (4→2→1)
+# because the crashes cluster on the fat mma/mmq template units under 4-way
+# cicc load.
 RUN git init /src/llama.cpp && cd /src/llama.cpp \
     && git remote add origin https://github.com/GenerelSchwerz/llama.cpp.git \
     && git fetch --depth 1 origin "$LLAMA_CPP_REV" && git checkout --detach FETCH_HEAD \
@@ -23,9 +26,12 @@ RUN git init /src/llama.cpp && cd /src/llama.cpp \
        -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
        -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
     && ( ok=0; \
-         for attempt in 1 2 3 4; do \
-           if cmake --build build --target llama-server --parallel "$LLAMA_BUILD_JOBS"; then ok=1; break; fi; \
-           echo "llama-server build attempt $attempt failed — incremental retry" >&2; \
+         for attempt in 1 2 3 4 5 6; do \
+           j=$(( LLAMA_BUILD_JOBS / (1 << (attempt - 1)) )); \
+           [ "$j" -lt 1 ] && j=1; \
+           echo "llama-server build attempt $attempt — parallel $j" >&2; \
+           if cmake --build build --target llama-server --parallel "$j"; then ok=1; break; fi; \
+           echo "attempt $attempt failed — incremental retry, weniger Parallelitaet" >&2; \
          done; \
          test "$ok" = 1 ) \
     && mkdir -p /opt/llama.cpp/bin \
