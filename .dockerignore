@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !LLAMA_CPP.json
+!netbird-entrypoint-praxis.sh
 !constraints.txt
 !supervisord.conf
 !scripts/
