@@ -27,7 +27,7 @@ RUN git init /src/llama.cpp && cd /src/llama.cpp \
        -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
     && ( ok=0; \
          for attempt in 1 2 3 4 5 6; do \
-           j=$(( LLAMA_BUILD_JOBS / (1 << (attempt - 1)) )); \
+           j=$(( LLAMA_BUILD_JOBS >> (attempt - 1) )); \
            [ "$j" -lt 1 ] && j=1; \
            echo "llama-server build attempt $attempt — parallel $j" >&2; \
            if cmake --build build --target llama-server --parallel "$j"; then ok=1; break; fi; \
