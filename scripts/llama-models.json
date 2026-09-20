@@ -4,8 +4,8 @@
     "qwen3.8-flash-next": {
       "alias": "qwen3.8-flash-next",
       "license": "https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/LICENSE",
-      "note": "177B UD-IQ3_XXS (82 GB) + shared Q8 MTP draft head. Needs ~82 GB VRAM-class GPU; geometry matches the original Codacus recipe defaults.",
-      "context": 4096,
+      "note": "177B UD-IQ3_XXS (82 GB) + shared Q8 MTP draft head. Needs ~82 GB VRAM-class GPU; context 262144 = Qwen3-Next natives 256K-Fenster.",
+      "context": 262144,
       "batch": 512,
       "ubatch": 512,
       "cache_size": 56,
@@ -43,8 +43,8 @@
     "qwen3.6-35b-a3b": {
       "alias": "qwen3.6-35b-a3b",
       "license": "Apache-2.0 (Qwen3.6)",
-      "note": "16GB-VRAM-guide model: 20.4 GB Q4_K_M with CUDA MoE expert cache. Needs >=32 GB system RAM (load-mode none).",
-      "context": 65536,
+      "note": "16GB-VRAM-guide model: 20.4 GB Q4_K_M with CUDA MoE expert cache. Needs >=32 GB system RAM (load-mode none). Context 131072 = Qwen3-Familien-Max (YaRN); KV dank GQA+A3B klein genug fuer 24-GB-Karten.",
+      "context": 131072,
       "batch": 8192,
       "ubatch": 8192,
       "cache_size": 96,
@@ -61,8 +61,8 @@
     "qwen3.8-27b": {
       "alias": "qwen3.8-27b",
       "license": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/LICENSE",
-      "note": "Dense 27B UD-Q4_K_M (16.5 GB) + shared Q4_0 MTP draft head (1.4 GB). Needs a 24 GB VRAM-class GPU; no MoE experts, so cache_size stays 0.",
-      "context": 8192,
+      "note": "Dense 27B UD-Q4_K_M (16.5 GB) + shared Q4_0 MTP draft head (1.4 GB). Needs a 24 GB VRAM-class GPU; no MoE experts, so cache_size stays 0. Context 32768: Dense-KV waere bei 131K >8 GB (ueber 24-GB-Karten hinaus).",
+      "context": 32768,
       "batch": 1024,
       "ubatch": 1024,
       "cache_size": 0,

@@ -87,14 +87,14 @@ class DeploymentTests(unittest.TestCase):
             detect.assert_called_once_with()
         self.assertTrue(plan['download'])
         self.assertEqual((plan['variant'], plan['cache_size'], plan['threads'], plan['context'],
-                          plan['batch'], plan['ubatch']), ('qwen3.8-flash-next', 56, 6, 4096, 512, 512))
+                          plan['batch'], plan['ubatch']), ('qwen3.8-flash-next', 56, 6, 262144, 512, 512))
         chat = config.server_command('chat', env)
         self.assertEqual(chat[chat.index('--moe-expert-cache-size') + 1], '56')
         self.assertIn('draft-mtp', chat)
         self.assertIn('Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf', ' '.join(chat))
         # Switching the model is one env var.
         switched = config.server_command('chat', dict(env, LLAMA_MODEL='qwen3.6-35b-a3b'))
-        self.assertEqual(switched[switched.index('--ctx-size') + 1], '65536')
+        self.assertEqual(switched[switched.index('--ctx-size') + 1], '131072')
         self.assertEqual(switched[switched.index('--moe-expert-cache-size') + 1], '96')
         self.assertNotIn('--spec-type', switched)
         embedding = config.server_command('embedding', env)
