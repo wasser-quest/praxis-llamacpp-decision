@@ -13,6 +13,11 @@ from cpu_threads import physical_thread_count
 
 BIN = Path('/opt/llama.cpp/bin')
 DECISION_BIN = Path('/opt/llama.cpp-decision/bin')  # codacus parallel-decision (Jev /v1/decision)
+# Codacus perf-Fork (qwen4exp-Routing-Profil-Expert-Cache, llama-moe-trace):
+# LLAMA_CHAT_RECIPE=codacus laesst den Chat-Server mit dem ORIGINAL-Flash-Next-
+# Rezept aus praxis-llamap-gpu laufen (moe-cache-profile/-slots statt GS-LRU).
+CODACUS_BIN = Path('/opt/llama.cpp-codacus/bin')
+CODACUS_REVISION = '27c54b4bbcefadedcec6397477cc2e866c1db716'
 REVISION = '907a73da9a149faa8c42ccde890f1d575586810f'
 MANIFEST = Path(__file__).with_name('llama-models.json')
 RUNTIME_SETTINGS = Path('/workspace/llama.cpp/runtime-settings.json')
@@ -101,6 +106,11 @@ def model_path(kind, env):
     return model_dir(kind, env) / Path(model_spec(kind, env)['files'][0]['path']).name
 
 
+def profile_path(env):
+    return absolute_path(env.get('LLAMA_MOE_CACHE_PROFILE',
+                        '/workspace/llama.cpp/profiles/qwen3.8-flash-next-merged.csv'))
+
+
 def thread_count(env):
     if env.get('LLAMA_THREADS', 'auto') == 'auto':
         return physical_thread_count()
@@ -137,10 +147,19 @@ def runtime_environment(env):
 def settings(env):
     env = runtime_environment(env)
     recipe = variant(env)
-    # Other forks' variables and the old Codacus/Flash recipe must not silently
-    # override the chosen recipe.
-    legacy = {'LLAMA_MOE_CACHE_SLOTS', 'LLAMA_MOE_CACHE_PROFILE', 'LLAMA_MTP_MODEL_DIR',
-              'LLAMA_GENERATE_PROFILE', 'GGML_SCHED_PREFETCH_EXPERTS'}
+    # Chat-Rezept (Binary + Placement): 'gs' (GenerelSchwerz LRU-Expert-Cache,
+    # Default) oder 'codacus' (perf-Fork: Routing-Profil + --moe-cache-slots,
+    # das ORIGINAL-Flash-Next-Setup aus praxis-llamap-gpu). Nur sinnvoll mit
+    # dem 82-GB-Modell — alle Varianten laufen auf beiden Rezepten, aber nur
+    # flash-next profitiert vom Profil-Cache.
+    chat_recipe = str(env.get('LLAMA_CHAT_RECIPE', 'gs')).strip().lower()
+    if chat_recipe not in ('gs', 'codacus'):
+        raise ValueError("LLAMA_CHAT_RECIPE must be 'gs' or 'codacus'")
+    # Under codacus the profile/slots/trace vars ARE the recipe (not legacy
+    # conflicts); under gs they stay forbidden (silent-override guard).
+    legacy = ({'LLAMA_MTP_MODEL_DIR', 'GGML_SCHED_PREFETCH_EXPERTS'} if chat_recipe == 'codacus'
+              else {'LLAMA_MOE_CACHE_SLOTS', 'LLAMA_MOE_CACHE_PROFILE', 'LLAMA_MTP_MODEL_DIR',
+                    'LLAMA_GENERATE_PROFILE', 'GGML_SCHED_PREFETCH_EXPERTS'})
     forbidden = [k for k, v in env.items() if v and (
         k in legacy or k.startswith('LLAMA_ARG_') or k.startswith('GGML_MOE_CACHE_') or k.startswith('OLLAMA_'))]
     if forbidden:
@@ -153,6 +172,8 @@ def settings(env):
         'ubatch': number(env, 'LLAMA_UBATCH_SIZE', recipe['ubatch'], 1, 8192),
         'cache_size': number(env, 'LLAMA_MOE_CACHE_SIZE', recipe['cache_size'], 0, 1024),
         'download': enabled(env, 'LLAMA_DOWNLOAD_MODELS'),
+        'chat_recipe': chat_recipe,
+        'moe_cache_slots': number(env, 'LLAMA_MOE_CACHE_SLOTS', 56, 1, 512),
         'embedding': enabled(env, 'LLAMA_EMBEDDING_ENABLED', '1'),
         'decision': enabled(env, 'LLAMA_DECISION_ENABLED', '1'),
         'download_timeout': number(env, 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS', 21600, 60, 86400),
@@ -221,7 +242,10 @@ def server_command(kind, env):
     if kind not in ('chat', 'embedding'):
         raise ValueError('Only chat, embedding and decision models can be served')
     config = settings(env)
-    args = [str(BIN / 'llama-server'), '--model', str(model_path(kind, env)),
+    # Chat-Rezept waehlt die Binary: 'gs' (Default) oder 'codacus' (Original-
+    # Flash-Next-Setup aus praxis-llamap-gpu: Routing-Profil-Expert-Cache).
+    chat_bin = CODACUS_BIN if (kind == 'chat' and config['chat_recipe'] == 'codacus') else BIN
+    args = [str(chat_bin / 'llama-server'), '--model', str(model_path(kind, env)),
             '--alias', models()['variants'][config['variant']]['alias'] if kind == 'chat' else models()['embedding']['alias'],
             '--host', '127.0.0.1',
             '--port', '11435' if kind == 'chat' else '11436',
@@ -229,10 +253,22 @@ def server_command(kind, env):
     if kind == 'chat':
         if config['ubatch'] > config['batch']:
             raise ValueError('LLAMA_UBATCH_SIZE must not exceed LLAMA_BATCH_SIZE')
-        args += placement_args(config) + [
-            '--ctx-size', str(config['context']), '--batch-size', str(config['batch']),
-            '--ubatch-size', str(config['ubatch']), '--jinja', '--cache-ram', '0',
-            '--moe-expert-cache-size', str(config['cache_size'])]
+        if config['chat_recipe'] == 'codacus':
+            # Original praxis-llamap-gpu Placement (perf-Fork, verifiziert
+            # gegen common/arg.cpp@27c54b4): Experts via mmap auf CPU,
+            # Profil-gesteuerter GPU-Cache statt GS-LRU, kein kv-offload.
+            args += ['--n-gpu-layers', '99', '--n-cpu-moe', '99', '--flash-attn', 'on',
+                     '--fit', 'off', '--load-mode', 'mmap', '--lazy-mode', 'on',
+                     '--ctx-size', str(config['context']), '--batch-size', str(config['batch']),
+                     '--ubatch-size', str(config['ubatch']), '--jinja', '--cache-ram', '0',
+                     '--moe-cache-profile', str(profile_path(env)),
+                     '--moe-cache-slots', str(config['moe_cache_slots']),
+                     '--verbosity', '4'] + thread_args(config)
+        else:
+            args += placement_args(config) + [
+                '--ctx-size', str(config['context']), '--batch-size', str(config['batch']),
+                '--ubatch-size', str(config['ubatch']), '--jinja', '--cache-ram', '0',
+                '--moe-expert-cache-size', str(config['cache_size'])]
         if 'draft' in models()['variants'][config['variant']]:
             # Shared Q8 MTP head: borrows the target's embedding/output tensors.
             args += ['--spec-type', 'draft-mtp', '--spec-draft-model', str(model_path('draft', env)),

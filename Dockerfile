@@ -8,6 +8,38 @@ ARG LLAMA_CPP_REV=907a73da9a149faa8c42ccde890f1d575586810f
 # Schema-Choices + Confidence, Parallel-Scoring aus einem gecachten Kontext).
 # EIGENER Build + EIGENER bin-Dir — die ggml-Backends zweier Fork-Staende
 # mischen sich nicht (Backend-DL .so-Konflikte).
+# Chat-Alternative (LLAMA_CHAT_RECIPE=codacus): codacus perf-Fork mit dem
+# ORIGINAL-Flash-Next-Rezept (qwen4exp-Routing-Profil-Expert-Cache +
+# llama-moe-trace fuer den Profil-Capture). Eigene Backends, eigener Dir.
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:a99a1860ba8e2916e5c3e73b72ec4c4301653a84586e05bfc9a2aa2d58027e97 AS codacus-build
+ARG CODACUS_LLAMA_CPP_REV=27c54b4bbcefadedcec6397477cc2e866c1db716
+ARG CUDA_DOCKER_ARCH=75;80;86;89;90;120
+ARG CODACUS_BUILD_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates libssl-dev \
+        && rm -rf /var/lib/apt/lists/*
+RUN git init /src/llama.cpp && cd /src/llama.cpp \
+    && git remote add origin https://github.com/thecodacus/llama.cpp.git \
+    && git fetch --depth 1 origin "$CODACUS_LLAMA_CPP_REV" && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$CODACUS_LLAMA_CPP_REV" \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+       -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+       -DCUDA_CUDA_ARCHITECTURES="$CUDA_DOCKER_ARCH" \
+       -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
+       -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+    && ( ok=0; \
+         for attempt in 1 2 3 4 5 6; do \
+           j=$(( CODACUS_BUILD_JOBS >> (attempt - 1) )); \
+           [ "$j" -lt 1 ] && j=1; \
+           echo "codacus build attempt $attempt — parallel $j" >&2; \
+           if cmake --build build --target llama-server llama-moe-trace --parallel "$j"; then ok=1; break; fi; \
+         done; \
+         test "$ok" = 1 ) \
+    && mkdir -p /opt/llama.cpp-codacus/bin \
+    && cp build/bin/llama-server build/bin/llama-moe-trace /opt/llama.cpp-codacus/bin/ \
+    && find build -name '*.so*' -exec cp -P {} /opt/llama.cpp-codacus/bin/ \; \
+    && cp LICENSE /opt/llama.cpp-codacus/LICENSE \
+    && git rev-parse HEAD > /opt/llama.cpp-codacus/REVISION
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:a99a1860ba8e2916e5c3e73b72ec4c4301653a84586e05bfc9a2aa2d58027e97 AS decision-build
 ARG DECISION_LLAMA_CPP_REV=14d04e755fa28653e87b9a07072892265bdc0fad
 ARG CUDA_DOCKER_ARCH=75;80;86;89;90;120
@@ -92,7 +124,10 @@ COPY --from=netbird /usr/local/bin/netbird-entrypoint.sh /usr/local/bin/netbird-
 COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp
 # Decision-Server (parallel-decision): eigene Binary + eigene Backends.
 COPY --from=decision-build /opt/llama.cpp-decision /opt/llama.cpp-decision
-RUN printf '/opt/llama.cpp/bin\n/opt/llama.cpp-decision/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
+# Codacus-Chat-Alternative (LLAMA_CHAT_RECIPE=codacus): llama-server +
+# llama-moe-trace, eigene Backends.
+COPY --from=codacus-build /opt/llama.cpp-codacus /opt/llama.cpp-codacus
+RUN printf '/opt/llama.cpp/bin\n/opt/llama.cpp-decision/bin\n/opt/llama.cpp-codacus/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
 COPY LLAMA_CPP.json /opt/praxis/LLAMA_CPP.json
 COPY scripts /opt/praxis/bin
 # pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image).

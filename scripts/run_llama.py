@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 
-from llama_config import BIN, child_environment, model_spec, runtime_environment, server_command, settings
+from llama_config import BIN, CODACUS_BIN, child_environment, model_spec, runtime_environment, server_command, settings
 from provision_llama import atomic_json, provision, read_receipt
 
 STATE_DIR = Path('/workspace/llama.cpp/run')
@@ -89,15 +89,15 @@ def serve(kind, env):
             atomic_json(state, receipt)
         for line in process.stdout:
             print(line, end='', flush=True)
-            if kind == 'chat' and cache_active(line) and not receipt['cache_active']:
+            if kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and cache_active(line) and not receipt['cache_active']:
                 receipt['cache_active'] = True
                 atomic_json(state, receipt)
-            if (kind == 'chat' and has_draft
+            if (kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and has_draft
                     and 'common_speculative_init_result: loading draft model ' in line
                     and not receipt['cache_active']):
                 raise RuntimeError('Main model CUDA expert cache was not activated before MTP drafting')
         code = process.wait()
-        if kind == 'chat' and not receipt['cache_active']:
+        if kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and not receipt['cache_active']:
             raise RuntimeError('No CUDA MoE expert-cache activation was reported')
         return code
     finally:
