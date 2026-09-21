@@ -16,11 +16,16 @@ import sys
 
 from llama_config import BIN, CODACUS_BIN, child_environment, model_spec, runtime_environment, server_command, settings
 from provision_llama import atomic_json, provision, read_receipt
+from profile_llama import ensure_profile
 
 STATE_DIR = Path('/workspace/llama.cpp/run')
 # GenerelSchwerz moe-cache prints one pool line per installed cached expert tensor:
 #   moe-cache: CUDA_MoE_Cache_Pool[<tensor>] = <MiB>  (<slots> slots x <MiB>)
 CACHE_LINE = re.compile(r'moe-cache: CUDA_MoE_Cache_Pool\[')
+# Codacus perf-Fork engagement line (fork doc):
+#   init_moe_expert_cache: expert cache: 40 layers x 112 slots, ... uploaded to CUDA0
+# A WARNING instead = pack did not fit -> silent baseline fallback (rejected).
+CODACUS_CACHE_LINE = re.compile(r'init_moe_expert_cache: expert cache: .*uploaded to CUDA')
 
 
 def command_digest(command):
@@ -69,6 +74,12 @@ def serve(kind, env):
         return 0
     mode = 'auto: physical cores, affinity and CPU quota' if runtime_environment(env).get('LLAMA_THREADS', 'auto') == 'auto' else 'manual override'
     print(f'llama.cpp {kind}: {config["threads"]} CPU worker threads ({mode})', flush=True)
+    if kind == 'chat' and config.get('chat_recipe') == 'codacus' and config['moe_cache_enabled']:
+        # Routing-Profil MUSS vor dem Serve existieren (einmalig pro Modell,
+        # workload-tolerant — merged code+chat reicht). Fehlt es:
+        # LLAMA_GENERATE_PROFILE=1 capturet automatisch (2 GPU-Traces ~1h),
+        # ohne Flag harter Operatorfehler statt stiller Baseline.
+        ensure_profile(env, generate=bool(config.get('generate_profile')), adopt=False)
     if kind == 'chat':
         require_cuda(env)
     provision(kind, env, download=config['download'])
@@ -96,9 +107,27 @@ def serve(kind, env):
                     and 'common_speculative_init_result: loading draft model ' in line
                     and not receipt['cache_active']):
                 raise RuntimeError('Main model CUDA expert cache was not activated before MTP drafting')
+            # Codacus perf-Fork: Engagement-Marker aus der Fork-Doku
+            # ('init_moe_expert_cache: expert cache: ... uploaded to CUDA0').
+            # Eine WARNING statt dieser Zeile = Pack passte nicht → Baseline-
+            # Fallback, den wir hart ablehnen (Slot-Tuning, s. --moe-cache-slots).
+            if (kind == 'chat' and config.get('chat_recipe') == 'codacus'
+                    and config['moe_cache_enabled']
+                    and CODACUS_CACHE_LINE.search(line) and not receipt['cache_active']):
+                receipt['cache_active'] = True
+                atomic_json(state, receipt)
+            if (kind == 'chat' and config.get('chat_recipe') == 'codacus' and has_draft
+                    and 'common_speculative_init_result: loading draft model ' in line
+                    and config['moe_cache_enabled'] and not receipt['cache_active']):
+                raise RuntimeError('Codacus MoE expert cache did not engage before MTP drafting '
+                                   '(pack allocation failed) — shrink LLAMA_MOE_CACHE_SLOTS')
         code = process.wait()
         if kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and not receipt['cache_active']:
             raise RuntimeError('No CUDA MoE expert-cache activation was reported')
+        if (kind == 'chat' and config.get('chat_recipe') == 'codacus' and config['moe_cache_enabled']
+                and not receipt['cache_active']):
+            raise RuntimeError('Codacus expert cache did not engage (warning = baseline fallback: '
+                               'shrink LLAMA_MOE_CACHE_SLOTS, ~900 MB VRAM headroom fors Pack)')
         return code
     finally:
         state.unlink(missing_ok=True)

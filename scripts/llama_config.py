@@ -24,7 +24,8 @@ RUNTIME_SETTINGS = Path('/workspace/llama.cpp/runtime-settings.json')
 TUNING_KEYS = {'LLAMA_CONTEXT_SIZE', 'LLAMA_BATCH_SIZE', 'LLAMA_UBATCH_SIZE',
                'LLAMA_REASONING_EFFORT', 'LLAMA_THINKING_BUDGET', 'LLAMA_REASONING_FORMAT',
                'LLAMA_THINKING_BUDGET_MESSAGE', 'LLAMA_POLL',
-               'LLAMA_MOE_CACHE_SIZE', 'LLAMA_THREADS', 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS'}
+               'LLAMA_MOE_CACHE_SIZE', 'LLAMA_MOE_CACHE_SLOTS', 'LLAMA_MOE_CACHE_ENABLED',
+               'LLAMA_THREADS', 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS'}
 
 
 def models():
@@ -159,7 +160,8 @@ def settings(env):
     # conflicts); under gs they stay forbidden (silent-override guard).
     legacy = ({'LLAMA_MTP_MODEL_DIR', 'GGML_SCHED_PREFETCH_EXPERTS'} if chat_recipe == 'codacus'
               else {'LLAMA_MOE_CACHE_SLOTS', 'LLAMA_MOE_CACHE_PROFILE', 'LLAMA_MTP_MODEL_DIR',
-                    'LLAMA_GENERATE_PROFILE', 'GGML_SCHED_PREFETCH_EXPERTS'})
+                    'LLAMA_GENERATE_PROFILE', 'GGML_MOE_CACHE_PROFILE', 'GGML_MOE_CACHE_SLOTS',
+                    'GGML_SCHED_PREFETCH_EXPERTS'})
     forbidden = [k for k, v in env.items() if v and (
         k in legacy or k.startswith('LLAMA_ARG_') or k.startswith('GGML_MOE_CACHE_') or k.startswith('OLLAMA_'))]
     if forbidden:
@@ -174,6 +176,13 @@ def settings(env):
         'download': enabled(env, 'LLAMA_DOWNLOAD_MODELS'),
         'chat_recipe': chat_recipe,
         'moe_cache_slots': number(env, 'LLAMA_MOE_CACHE_SLOTS', 56, 1, 512),
+        # Expert-Cache AUS (LLAMA_MOE_CACHE_ENABLED=0): codacus-Rezept ohne
+        # --moe-cache-profile/-slots — reine Baseline-Placement (mmap/CPU),
+        # kein Profil noetig, kein GPU-Cache.
+        'moe_cache_enabled': enabled(env, 'LLAMA_MOE_CACHE_ENABLED', '1'),
+        # Fehlendes Routing-Profil beim Start automatisch capturen (2 GPU-
+        # Traces, ~1h, einmalig) statt abzusterben: nur mit diesem Flag.
+        'generate_profile': enabled(env, 'LLAMA_GENERATE_PROFILE'),
         'embedding': enabled(env, 'LLAMA_EMBEDDING_ENABLED', '1'),
         'decision': enabled(env, 'LLAMA_DECISION_ENABLED', '1'),
         'download_timeout': number(env, 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS', 21600, 60, 86400),
@@ -260,10 +269,11 @@ def server_command(kind, env):
             args += ['--n-gpu-layers', '99', '--n-cpu-moe', '99', '--flash-attn', 'on',
                      '--fit', 'off', '--load-mode', 'mmap', '--lazy-mode', 'on',
                      '--ctx-size', str(config['context']), '--batch-size', str(config['batch']),
-                     '--ubatch-size', str(config['ubatch']), '--jinja', '--cache-ram', '0',
-                     '--moe-cache-profile', str(profile_path(env)),
-                     '--moe-cache-slots', str(config['moe_cache_slots']),
-                     '--verbosity', '4'] + thread_args(config)
+                     '--ubatch-size', str(config['ubatch']), '--jinja', '--cache-ram', '0']
+            if config['moe_cache_enabled']:
+                args += ['--moe-cache-profile', str(profile_path(env)),
+                         '--moe-cache-slots', str(config['moe_cache_slots'])]
+            args += ['--verbosity', '4'] + thread_args(config)
         else:
             args += placement_args(config) + [
                 '--ctx-size', str(config['context']), '--batch-size', str(config['batch']),
