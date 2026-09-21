@@ -100,5 +100,22 @@
         "sha256": "f7af6f66802f4df86eda10fe9bbcfc75c39562bed48ef6ace719a251cf1c2fdb"
       }
     ]
+  },
+  "decision_default": "qwen3-1.7b",
+  "decisions": {
+    "qwen3-1.7b": {
+      "alias": "qwen3-1.7b",
+      "license": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/blob/90862c4b9d2787eaed51d12237eafdfe7c5f6077/LICENSE",
+      "note": "Dense 1.7B — attention-only (kein Hybrid): ideal fuer Jev /v1/decision Parallel-Scoring. Q8_0 1.8 GB.",
+      "repository": "Qwen/Qwen3-1.7B-GGUF",
+      "revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+      "files": [
+        {
+          "path": "Qwen3-1.7B-Q8_0.gguf",
+          "size": 1834426016,
+          "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a"
+        }
+      ]
+    }
   }
 }

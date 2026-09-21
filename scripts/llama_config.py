@@ -12,6 +12,7 @@ import stat
 from cpu_threads import physical_thread_count
 
 BIN = Path('/opt/llama.cpp/bin')
+DECISION_BIN = Path('/opt/llama.cpp-decision/bin')  # codacus parallel-decision (Jev /v1/decision)
 REVISION = '907a73da9a149faa8c42ccde890f1d575586810f'
 MANIFEST = Path(__file__).with_name('llama-models.json')
 RUNTIME_SETTINGS = Path('/workspace/llama.cpp/runtime-settings.json')
@@ -66,11 +67,24 @@ def model_dir(kind, env):
         return model_dir('chat', env) / 'MTP'
     if kind == 'embedding':
         return absolute_path(env.get('LLAMA_EMBEDDING_MODEL_DIR', '/workspace/llama.cpp/models/nomic-embed-text'))
+    if kind == 'decision':
+        return absolute_path(env.get('LLAMA_DECISION_MODEL_DIR',
+                            f'/workspace/llama.cpp/models/decision-{decision_variant_name(env)}'))
     raise ValueError('Unknown model kind')
+
+
+def decision_variant_name(env):
+    name = str(env.get('LLAMA_DECISION_MODEL', '') or models().get('decision_default', 'qwen3-1.7b'))
+    if name not in models().get('decisions', {}):
+        raise ValueError('LLAMA_DECISION_MODEL must name a pinned decision variant: '
+                         + ', '.join(sorted(models().get('decisions', {}))))
+    return name
 
 
 def model_spec(kind, env):
     """Pinned repository/revision/files for one servable/provisionable artifact."""
+    if kind == 'decision':
+        return models()['decisions'][decision_variant_name(env)]
     if kind == 'chat':
         return variant(env)
     if kind == 'draft':
@@ -140,6 +154,7 @@ def settings(env):
         'cache_size': number(env, 'LLAMA_MOE_CACHE_SIZE', recipe['cache_size'], 0, 1024),
         'download': enabled(env, 'LLAMA_DOWNLOAD_MODELS'),
         'embedding': enabled(env, 'LLAMA_EMBEDDING_ENABLED', '1'),
+        'decision': enabled(env, 'LLAMA_DECISION_ENABLED', '1'),
         'download_timeout': number(env, 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS', 21600, 60, 86400),
         'reasoning_effort': (str(env['LLAMA_REASONING_EFFORT'])
                              if env.get('LLAMA_REASONING_EFFORT') in ('minimal', 'low', 'medium', 'high', 'max', 'xhigh')
@@ -178,9 +193,33 @@ def placement_args(config):
             '--cache-type-v', 'f16', '--kv-offload'] + thread_args(config)
 
 
+def decision_server_command(env):
+    """Jev-Decision-Server (codacus parallel-decision): /v1/decision-Endpoint.
+
+    Kleines denses Modell (Schema-Choices + Confidence, Parallel-Scoring aus
+    einem gecachten Kontext). Läuft auf CPU (NGL=0) oder GPU — dieselbe Box
+    wie der Chat-Server, eigener Port, eigene Binary/Backends.
+    """
+    name = decision_variant_name(env)
+    spec = models()['decisions'][name]
+    env = runtime_environment(env)
+    ngl = number(env, 'LLAMA_DECISION_NGL', 999, 0, 999)
+    port = number(env, 'LLAMA_DECISION_PORT', 11440, 1024, 65535)
+    context = number(env, 'LLAMA_DECISION_CONTEXT', 8192, 512, 131072)
+    threads = thread_count(env)
+    args = [str(DECISION_BIN / 'llama-server'), '--model', str(model_path('decision', env)),
+            '--alias', spec['alias'],
+            '--host', '127.0.0.1', '--port', str(port),
+            '--n-gpu-layers', str(ngl),
+            '--ctx-size', str(context), '--jinja'] + thread_args({'threads': threads})
+    return args
+
+
 def server_command(kind, env):
+    if kind == 'decision':
+        return decision_server_command(env)
     if kind not in ('chat', 'embedding'):
-        raise ValueError('Only chat and embedding models can be served')
+        raise ValueError('Only chat, embedding and decision models can be served')
     config = settings(env)
     args = [str(BIN / 'llama-server'), '--model', str(model_path(kind, env)),
             '--alias', models()['variants'][config['variant']]['alias'] if kind == 'chat' else models()['embedding']['alias'],

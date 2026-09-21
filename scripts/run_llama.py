@@ -64,6 +64,9 @@ def serve(kind, env):
     if kind == 'embedding' and not config['embedding']:
         print('llama.cpp embedding service explicitly disabled', flush=True)
         return 0
+    if kind == 'decision' and not config['decision']:
+        print('llama.cpp decision service explicitly disabled', flush=True)
+        return 0
     mode = 'auto: physical cores, affinity and CPU quota' if runtime_environment(env).get('LLAMA_THREADS', 'auto') == 'auto' else 'manual override'
     print(f'llama.cpp {kind}: {config["threads"]} CPU worker threads ({mode})', flush=True)
     if kind == 'chat':
@@ -82,7 +85,7 @@ def serve(kind, env):
     receipt = {'pid': process.pid, 'process': process_identity(process.pid),
                'command': command_digest(command), 'cache_active': False}
     try:
-        if kind == 'embedding':
+        if kind in ('embedding', 'decision'):
             atomic_json(state, receipt)
         for line in process.stdout:
             print(line, end='', flush=True)
@@ -112,7 +115,7 @@ def serve(kind, env):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('kind', choices=['chat', 'embedding'])
+    parser.add_argument('kind', choices=['chat', 'embedding', 'decision'])
     parser.add_argument('--print-command', action='store_true', help='Print JSON argv; no download or inference')
     args = parser.parse_args()
     os.umask(0o077)

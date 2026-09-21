@@ -4,6 +4,39 @@ ARG PGPU_IMAGE=vayayo/praxis-gpu-router:0.2
 FROM netbirdio/netbird:0.78.2-rootless@sha256:4a30e98bb0a98848c3b2a3ca4778cebfbe87d210f05b1f40288bb072d627c3fd AS netbird
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:a99a1860ba8e2916e5c3e73b72ec4c4301653a84586e05bfc9a2aa2d58027e97 AS llama-build
 ARG LLAMA_CPP_REV=907a73da9a149faa8c42ccde890f1d575586810f
+# Decision-Server: codacus parallel-decision (Jev /v1/decision-Endpoint:
+# Schema-Choices + Confidence, Parallel-Scoring aus einem gecachten Kontext).
+# EIGENER Build + EIGENER bin-Dir — die ggml-Backends zweier Fork-Staende
+# mischen sich nicht (Backend-DL .so-Konflikte).
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:a99a1860ba8e2916e5c3e73b72ec4c4301653a84586e05bfc9a2aa2d58027e97 AS decision-build
+ARG DECISION_LLAMA_CPP_REV=14d04e755fa28653e87b9a07072892265bdc0fad
+ARG CUDA_DOCKER_ARCH=75;80;86;89;90;120
+ARG DECISION_BUILD_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates libssl-dev \
+        && rm -rf /var/lib/apt/lists/*
+RUN git init /src/llama.cpp && cd /src/llama.cpp \
+    && git remote add origin https://github.com/thecodacus/llama.cpp.git \
+    && git fetch --depth 1 origin "$DECISION_LLAMA_CPP_REV" && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$DECISION_LLAMA_CPP_REV" \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+       -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+       -DCMAKE_CUDA_ARCHITECTURES="$CUDA_DOCKER_ARCH" \
+       -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
+       -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+    && ( ok=0; \
+         for attempt in 1 2 3 4 5 6; do \
+           j=$(( DECISION_BUILD_JOBS >> (attempt - 1) )); \
+           [ "$j" -lt 1 ] && j=1; \
+           echo "decision llama-server build attempt $attempt — parallel $j" >&2; \
+           if cmake --build build --target llama-server --parallel "$j"; then ok=1; break; fi; \
+         done; \
+         test "$ok" = 1 ) \
+    && mkdir -p /opt/llama.cpp-decision/bin \
+    && cp build/bin/llama-server /opt/llama.cpp-decision/bin/ \
+    && find build -name '*.so*' -exec cp -P {} /opt/llama.cpp-decision/bin/ \; \
+    && cp LICENSE /opt/llama.cpp-decision/LICENSE \
+    && git rev-parse HEAD > /opt/llama.cpp-decision/REVISION
 ARG CUDA_DOCKER_ARCH=75;80;86;89;90;120
 ARG LLAMA_BUILD_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -57,7 +90,9 @@ COPY --from=netbird /usr/local/bin/netbird /usr/local/bin/netbird
 COPY --from=netbird /usr/local/bin/netbird-entrypoint.sh /usr/local/bin/netbird-entrypoint.sh
 # Executables and ALL shared libraries come from the same pinned fork build.
 COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp
-RUN printf '/opt/llama.cpp/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
+# Decision-Server (parallel-decision): eigene Binary + eigene Backends.
+COPY --from=decision-build /opt/llama.cpp-decision /opt/llama.cpp-decision
+RUN printf '/opt/llama.cpp/bin\n/opt/llama.cpp-decision/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
 COPY LLAMA_CPP.json /opt/praxis/LLAMA_CPP.json
 COPY scripts /opt/praxis/bin
 # pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image).

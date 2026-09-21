@@ -163,7 +163,7 @@ def provision(kind, env, download=False, rehash=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--kind', choices=['chat', 'draft', 'embedding'], default='chat')
+    parser.add_argument('--kind', choices=['chat', 'draft', 'embedding', 'decision'], default='chat')
     parser.add_argument('--download', action='store_true')
     parser.add_argument('--rehash', action='store_true', help='Read and SHA256 every byte, ignoring verification receipts')
     args = parser.parse_args()
