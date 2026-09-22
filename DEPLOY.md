@@ -7,9 +7,11 @@ sizes and [LLAMA_CPP.json](LLAMA_CPP.json) for all source pins.
 ## Release is not deployment
 
 1. Run offline tests: `python3 -m unittest discover -s tests -v`.
-2. Build/publish and verify the matching router/agent first. Set `PGPU_IMAGE` to
-   its immutable router image reference for the dependent build. The Dockerfile's
-   historical default `0.23` does not contain the new agent work.
+2. Build/publish and verify the matching router/agent first. The Dockerfile pins
+   router `0.26.3` by immutable digest, embedding agent `0.2.1` with corrected
+   fatal listener exit status. For a later release, set `PGPU_IMAGE` to its
+   verified immutable router reference. Existing Vast contracts keep their old
+   agent across stop/start; publishing this image does not upgrade them.
 3. `bash scripts/build.sh` builds amd64; `IMAGE_TAG` defaults to
    `praxis-llamacpp-decision:dev`. `PGPU_IMAGE` is forwarded as a build argument.
 4. `bash scripts/verify-image.sh` checks the chosen image with no network, GPU,

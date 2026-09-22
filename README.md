@@ -110,10 +110,11 @@ python3 -m unittest discover -s tests -v
 cp runtime.env.example runtime.env && chmod 600 runtime.env
 ```
 
-Set secrets privately. For a release, first publish/verify the matching router
-with updated agent; pass its immutable reference through `PGPU_IMAGE` when
-running `bash scripts/build.sh`. Without that override the Dockerfile still
-uses the historical router `0.23` — **not an updated-agent release**.
+Set secrets privately. The Dockerfile pins router `0.26.3` by digest and embeds
+agent `0.2.1` (fatal listener errors exit nonzero for Supervisor). For a later
+release, first publish/verify the matching router and pass its immutable
+reference through `PGPU_IMAGE` when running `bash scripts/build.sh`.
+Existing Vast contracts retain their old agent across stop/start.
 `IMAGE_TAG` defaults to `praxis-llamacpp-decision:dev`.
 `bash scripts/verify-image.sh` checks the built image without network, GPU,
 models, credentials, host mounts or published ports.
