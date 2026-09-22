@@ -1,76 +1,83 @@
-# Deployment: 16 GB VRAM llama.cpp chat + embeddings (fork)
+# Decision / GS alias: deployment and acceptance
 
-This fork is **llama.cpp only**: no ComfyUI, no TTS, no Vosk. It serves one
-OpenAI-compatible chat endpoint (port **11434**) from a pinned
-GenerelSchwerz `moe-cache` llama.cpp build, following the owner's
-[16GB-VRAM-Setup](https://github.com/GenerelSchwerz/llama.cpp/wiki/16GB-VRAM-Setup).
+This image contains three separately pinned llama.cpp backends, not only the
+historical 16 GB GS recipe. See [README.md](README.md) for current model/context
+sizes and [LLAMA_CPP.json](LLAMA_CPP.json) for all source pins.
 
-## Hardware sizing
+## Release is not deployment
 
-- **GPU:** one NVIDIA GPU with ~16 GB VRAM (guide owner measured on
-  RTX 5070 Ti, 16,303 MiB). The CUDA build targets
-  `CUDA_DOCKER_ARCH=75;80;86;89;90;120` (Turing–Ampere–Ada + B200/5090; Blackwell consumer like 5060/5070 Ti needs CUDA 12.9+).
-- **VRAM at runtime:** cache 132 reached 14,369 MiB peak (NP1) / 14,675 MiB
-  (NP4) on the owner card. `LLAMA_MOE_CACHE_SIZE=96` is the recommended start
-  for mixed use or shared displays; raise/lower it per request geometry:
-  NP4 start at 48, NP8 at 64, NP16 at 48 in the guide's parallel table.
-- **System RAM:** 32 GB practical minimum for the 20.4 GB Q4_K_M with
-  `--load-mode none`; 62 GiB+ preferred (guide owner system).
+1. Run offline tests: `python3 -m unittest discover -s tests -v`.
+2. Build/publish and verify the matching router/agent first. Set `PGPU_IMAGE` to
+   its immutable router image reference for the dependent build. The Dockerfile's
+   historical default `0.23` does not contain the new agent work.
+3. `bash scripts/build.sh` builds amd64; `IMAGE_TAG` defaults to
+   `praxis-llamacpp-decision:dev`. `PGPU_IMAGE` is forwarded as a build argument.
+4. `bash scripts/verify-image.sh` checks the chosen image with no network, GPU,
+   model download, credentials, host mounts or published ports. It checks all
+   source pins, per-binary library resolution, metrics/cache flags, Supervisor,
+   nginx origin guards and forbidden mutations.
+5. Publish Decision and the `praxis-llamap-gs-gpu` alias from **this repository**,
+   independently verify registry digests and embedded agent identity, and retain
+   rollback tags. Never overwrite the alias with historical `fork-llama`.
+6. Deployment restart, live rentals, profiling, benchmarks and acceptance are
+   separate operator-authorized steps. Tests do not restart a deployment.
 
-## Provisioning
+## Resource and startup planning
 
-Weights are never baked into the image:
+Select model, image digest, host RAM, GPU VRAM, local SSD, download charges and
+maximum startup cost together. Flash Next's ~82 GB weight size is **not** its
+VRAM requirement: GS CPU experts consume host RAM. The current 256K/128K/32K
+contexts are not verified fits on an arbitrary 16/24 GB card. Also account for
+MTP, CPU embeddings and the enabled Decision model. GPU name alone is not a
+suitability test; upstream guide measurements used different geometry.
 
-1. Set `LLAMA_DOWNLOAD_MODELS=1` in `runtime.env` (license: Qwen3.6, Apache-2.0;
-   pinned revision in `scripts/llama-models.json`). First chat start downloads
-   and SHA256-verifies `Qwen3.6-35B-A3B-Q4_K_M.gguf` (20,419,565,568 bytes)
-   into `$LLAMA_MODEL_DIR`, then requires a CUDA device and waits for the
-   `moe-cache: CUDA_MoE_Cache_Pool[...]` activation line before writing its
-   readiness receipt. A missing activation is fatal, not silently accepted.
-2. Nomic embeddings download into `$LLAMA_EMBEDDING_MODEL_DIR` on their own
-   start; the second llama-server is CPU-only (`--device none`).
-3. `netbird` enrolls the box on the private overlay; the nginx proxy on 11434
-   rejects browser origins and proxies 11435/11436 loopback servers.
+Weights are not baked in. `LLAMA_DOWNLOAD_MODELS=1` explicitly permits downloads;
+chat, optional MTP, embeddings and Decision have separate pinned files/receipts.
+Verified files are reused, invalid public files preserved rather than overwritten.
+Current transport is still a single-attempt download with retained partials,
+**not** a resumable/parallel mirror implementation. Automatic preparation retry,
+full prepare/serve separation and router ETA×price cancellation remain open.
 
-## Runtime tuning
+The Codacus Flash Next recipe needs a verified routing profile unless
+`LLAMA_MOE_CACHE_ENABLED=0`. `LLAMA_GENERATE_PROFILE=1` permits two real GPU
+traces after weight verification; each is bounded by
+`LLAMA_TRACE_TIMEOUT_SECONDS` (default 3600, range 60–7200). Do not opt in on a
+busy or unbudgeted machine. Failures leave diagnostic staging, not an automatically
+published/retried profile. Existing mismatched receipts need inspection and
+explicit adoption, including after a changed recipe identity.
 
-`LLAMA_MOE_CACHE_SIZE` (0..1024), context/batch/ubatch and reasoning controls
-can be overridden persistently in
-`/workspace/llama.cpp/runtime-settings.json` (bounded allowlist, restart the
-chat service only after checking `nvidia-smi`). Old Codacus/Flash recipe
-variables (`LLAMA_MOE_CACHE_SLOTS`, `LLAMA_MTP_MODEL_DIR`,
-`LLAMA_GENERATE_PROFILE`, `GGML_SCHED_PREFETCH_EXPERTS`, `OLLAMA_*`,
-`LLAMA_ARG_*`) are rejected at startup and must be removed.
+## Private services and readiness
 
-## Operations
+Supervisor programs: `netbird`, `gpu-agent`, `llama-proxy`, `llama-chat`,
+`llama-embedding`, `decision-server`. All servers bind loopback. NetBird ACLs and
+router services must allow only intended paths/ports; do not publish host ports.
 
-- `supervisorctl -c /etc/supervisor/praxis.conf status` — services:
-  `netbird`, `llama-chat`, `llama-proxy`, `llama-embedding`. Chat/embedding
-  never autorestart after a failed preparation (missing weights, OOM, cache
-  fallback): restart them deliberately after fixing the cause.
-- Logs: `/workspace/logs/{llama-chat,llama-embedding,llama-proxy-supervisor}.log`.
-- Container health (`/opt/praxis/bin/healthcheck.py`) requires the chat
-  readiness receipt (same argv + same PID + active cache), `status=ok` on
-  OpenAI `/health`, embeddings when enabled, and a ready NetBird peer.
-- Acceptance: `python3 /opt/praxis/bin/acceptance_llama.py --run` runs six
-  bounded GPU generations (plain, tool call, ~2k-token prompt), a CPU embedding
-  request, and writes a private JSON report.
+- 11434: private nginx OpenAI API, health, read-only GET/HEAD `/props` and `/metrics`.
+  Browser-origin requests and mutation requests to those introspection paths fail.
+- 11435: chat backend; 11436: CPU embeddings; 11440: independent Decision backend
+  by default (`LLAMA_DECISION_PORT` may change it).
+- Container health checks enabled services, process identity/argv receipts,
+  required cache activation and NetBird. Agent HTTP probes are independently
+  configured and **do not incorporate all container receipt checks** automatically.
+- Explicitly disabled cache/dense models do not require a nonexistent activation
+  marker. A requested GS/Codacus cache still must actually engage.
+- Model preparation and serving still share one launcher; automatic retries remain
+  disabled. After fixing a failure, deliberately restart only the affected idle
+  service. Do not restart a live generation for a tuning/assets change.
 
-## Image build and verification
+Inspect services with `supervisorctl -c /etc/supervisor/praxis.conf status`.
+Logs live in `/workspace/logs`. Keep runtime credentials, profiles, weights and
+private reports out of Git/build context. Back up persistent state privately.
 
-```sh
-bash scripts/build.sh          # builds the pinned moe-cache fork with CUDA
-bash scripts/verify-image.sh   # CPU-only checks: flags, supervisor, proxy, router mode
-```
+## Hardware acceptance (separate authorization)
 
-The image build fails if the pinned commit's `llama-server --help` lacks
-`--moe-expert-cache-size`, `--cache-ram`, `--load-mode`, `--kv-offload`. Do not
-use the expert-cache flags on Vulkan/ROCm/Metal/CPU-only backends (owner
-warning; CUDA required).
+Measure cold download/load/first-token time, physical GPU/RAM/VRAM headroom,
+real prefill/decode, concurrency, cancellation, long context, stop/resume and
+VPN reachability on the actual allocation. A missing measurement is unknown.
+`python3 /opt/praxis/bin/acceptance_llama.py --run` performs bounded real inference
+and writes a private report; it is **not** part of offline tests and does not
+establish all Decision endpoint, quality, lifecycle or commercial acceptance.
 
-## Praxis client
-
-Point Praxis at the NetBird IP of this box on port 11434 (`LLAMA_*`-free
-context: `settings.llama_base_url=http://<netbird-ip>:11434`). Use
-`qwen3.6-35b-a3b` as the model id. Embedding dimensions stay 768 (Nomic v1.5),
-so existing Praxis vector indices remain compatible.
+Praxis chat uses the router or private 11434 base URL and the actual selected
+`/v1/models` alias. Configure Decision separately on its approved endpoint;
+verify CPU embeddings and existing vector-index compatibility independently.

@@ -1,89 +1,123 @@
-# praxis-llamap-gs-gpu-fork
+# Praxis llama.cpp Decision GPU fork
 
-16 GB VRAM llama.cpp chat/embedding companion for Praxis. Fork of
-`praxis-llamap-gpu` **stripped to the llama.cpp stack only** (no ComfyUI, no
-TTS, no Vosk) and rebuilt around **GenerelSchwerz's `moe-cache` branch** of
-llama.cpp, following the owner's [16GB VRAM Setup](https://github.com/GenerelSchwerz/llama.cpp/wiki/16GB-VRAM-Setup).
+Private NetBird LLM stack: chat, CPU Nomic embeddings, and an independent
+`/v1/decision` server. No ComfyUI, TTS or Vosk. This repository supplies both
+`vayayo/praxis-llamacpp-decision` and its `vayayo/praxis-llamap-gs-gpu` alias;
+**never publish the historical `fork-llama` over that alias**.
 
-- **Model choice via `LLAMA_MODEL`** (pinned variants in
-  `scripts/llama-models.json`); unset means the manifest default:
-  - **`qwen3.8-flash-next`** (default) — `unsloth/Qwen3.8-Flash-Next-GGUF`
-    UD-IQ3_XXS, 3 shards, **82 GB** + shared **Q8 MTP draft head** (2.8 GB).
-    177B MoE; needs an ~82 GB VRAM-class GPU. Geometry: 4096 ctx / 512 batch /
-    ubatch / 56 expert-cache slots. This is the model that works (the original
-    stack's recipe, now on the GenerelSchwerz moe-cache fork with draft-mtp).
-  - **`qwen3.8-27b`** — `unsloth/Qwen3.8-27B-GGUF` UD-Q4_K_M (16.5 GB) + shared
-    Q4_0 MTP draft head (1.4 GB). Dense 27B, 8K ctx / 1024 batch, cache off.
-    Needs a 24 GB VRAM-class GPU (e.g. RTX 3090).
-  - **`qwen3.6-35b-a3b`** — `ggml-org/Qwen3.6-35B-A3B-GGUF` Q4_K_M, one 20.4 GB
-    GGUF, **16 GB VRAM guide** model with CUDA MoE expert cache:
-    `LLAMA_MOE_CACHE_SIZE=96` (cache 132 measured 14,369 MiB peak on the
-    owner's RTX 5070 Ti 16 GB), `-c 65536 -b 8192 -ub 8192`, F16 KV offloaded,
-    `--load-mode none --cache-ram 0 -fit off -fa on --jinja`.
-    **32 GB system RAM is the practical minimum** for this one; 62 GiB+ preferred.
-- Every variant carries its own default geometry; override any value between
-  launcher bounds with `LLAMA_CONTEXT_SIZE`, `LLAMA_BATCH_SIZE`,
-  `LLAMA_UBATCH_SIZE`, `LLAMA_MOE_CACHE_SIZE`.
-- One CPU worker per available physical core, auto-detected with
-  affinity/cpuset and CPU-quota limits (`LLAMA_THREADS=auto`).
-- Runtime env opts into automatic download with SHA256 verification; verified
-  files are reused (`LLAMA_DOWNLOAD_MODELS=1`).
-- Nomic embeddings remain available through a second, CPU-only llama-server.
-- Private VPN port: **11434** (OpenAI-compatible, nginx origin guard).
+Local changes are not automatically in published images. Offline tests and
+upstream performance references are **not GPU, throughput or production acceptance**.
+See [DEPLOY.md](DEPLOY.md) for separate release and deployment gates.
+
+## Three pinned backends
+
+[LLAMA_CPP.json](LLAMA_CPP.json) records all three source pins:
+
+| Use | Selection | Binary directory |
+| --- | --- | --- |
+| GS chat, default | `LLAMA_CHAT_RECIPE=gs` | `/opt/llama.cpp/bin` |
+| Codacus chat, alternative | `LLAMA_CHAT_RECIPE=codacus` | `/opt/llama.cpp-codacus/bin` |
+| Parallel Decision, separate process | `LLAMA_DECISION_ENABLED=1` (default) | `/opt/llama.cpp-decision/bin` |
+
+The launchers set each process's own library directory first; incompatible
+fork libraries are not placed together in the global loader configuration.
+Embeddings use the GS binary with `--device none --n-gpu-layers 0`.
+
+GS uses `--moe-expert-cache-size`, CPU experts and `--load-mode none`.
+Codacus uses mmap/lazy loading and `--moe-cache-profile/--moe-cache-slots`.
+Its supplied profile workflow is **Flash Next only**; other models require
+explicit `LLAMA_MOE_CACHE_ENABLED=0` rather than reusing an incompatible profile.
+A required cache failing to activate is an error. Explicit cache disable and
+the dense model are distinct, supported configurations, not failed activation.
+
+## Model selection and unchanged current defaults
+
+Models, revisions, file sizes and SHA256s are pinned in
+[scripts/llama-models.json](scripts/llama-models.json).
+
+| `LLAMA_MODEL` | Weight files, approximately | Context | Batch/ubatch | GS cache |
+| --- | --- | ---: | ---: | ---: |
+| `qwen3.8-flash-next` (default) | 82 GB + 2.8 GB Q8 MTP | 262144 | 512 | 56 |
+| `qwen3.6-35b-a3b` | 20.4 GB Q4_K_M, no MTP | 131072 | 8192 | 96 |
+| `qwen3.8-27b` | 16.5 GB + 1.4 GB Q4_0 MTP, dense | 32768 | 1024 | 0 |
+
+**Weight-file size is not VRAM demand.** The 82 GB Flash Next model offloads
+experts to CPU memory; it does not intrinsically require an 82 GB GPU. Conversely,
+16 GB VRAM alone does not demonstrate that the current context/cache settings fit.
+Budget host RAM, GPU KV/runtime/cache memory, the concurrent Decision server,
+local SSD and download charges. For GS Flash Next, prefer 96 GiB+ host RAM;
+62 GiB is below the complete weight set. Qwen3.6 needs at least roughly 32 GB
+host RAM; a dense 27B on a 24 GB GPU still needs real headroom/quality testing.
+The upstream [16 GB guide](https://github.com/GenerelSchwerz/llama.cpp/wiki/16GB-VRAM-Setup)
+used different geometry; it is not evidence for these current defaults.
+
+Override context/batch/ubatch/cache within launcher bounds using
+`LLAMA_CONTEXT_SIZE`, `LLAMA_BATCH_SIZE`, `LLAMA_UBATCH_SIZE`,
+`LLAMA_MOE_CACHE_SIZE`. Defaults were **not silently reduced to make tests pass**.
+`LLAMA_THREADS=auto` uses physical cores, affinity/cpuset and visible CPU quotas.
+Tuning also supports the allowlisted `/workspace/llama.cpp/runtime-settings.json`;
+apply only while idle and restart the affected service deliberately.
+
+## Provisioning and profiles
+
+- `LLAMA_DOWNLOAD_MODELS=1` explicitly authorizes startup downloads. The example
+  enables it: inspect licenses, disk/RAM and rental/download budgets first.
+- Chat variants go under `/workspace/llama.cpp/models/<variant>`; an optional
+  `LLAMA_MODEL_DIR` overrides this. MTP is under `MTP/`. CPU embeddings and the
+  enabled Decision model are additional downloads, not included in chat sizes.
+- Verified local files are reused. Missing/changed files fail closed without
+  authorization. Existing destination files are not silently overwritten.
+- Current model transport does **not yet implement bounded parallel/resumable
+  Range downloads or router ETA×price cancellation**. Failed `.gguf.part` files
+  are retained for inspection; do not mistake retention for resumable transfer.
+- Codacus profile capture performs real GPU inference: opt in with
+  `LLAMA_GENERATE_PROFILE=1` only on an idle, budget-approved backer. Verified
+  chat/draft weights precede capture. Two synthetic traces each have
+  `LLAMA_TRACE_TIMEOUT_SECONDS=3600` by default (60–7200 seconds each); timeout
+  leaves staging for inspection and does not publish/retry a partial profile.
+- Existing CSVs require a matching model/fork/profile receipt. Inspect mismatches
+  before explicit `python3 /opt/praxis/bin/profile_llama.py --adopt-existing`
+  with `LLAMA_CHAT_RECIPE=codacus`; existing data is never regenerated automatically.
+  A corrected recipe receipt can require explicit re-adoption after an upgrade.
+
+Adding a variant requires a reviewed model/revision, every file's exact size and
+SHA256, explicit geometry and optional pinned draft. Rebuild, use a distinct
+performance profile, and perform hardware acceptance before scoring/routing it.
+
+## Interfaces and health
+
+- **11434**, loopback nginx exposed only through approved NetBird ACLs:
+  OpenAI chat/completions/models/embeddings, `/health`, `/health/embedding`.
+- `/props` and `/metrics` are read-only GET/HEAD routes on 11434. No `--props`
+  mutation flag is enabled. Metrics are enabled on all three llama servers.
+- **11435** chat backend, **11436** CPU embeddings; both loopback.
+- **11440** Decision backend by default, loopback, independent of chat.
+  `LLAMA_DECISION_MODEL=qwen3-1.7b`, `LLAMA_DECISION_NGL=999`,
+  `LLAMA_DECISION_CONTEXT=8192` are current defaults. `NGL=0` uses CPU/RAM,
+  not free resources. Review ACLs and router service configuration separately.
+- Container health checks enabled services, process/argv-bound readiness receipts,
+  required cache activation and NetBird. The agent's configured HTTP probes are
+  a **different gate**; they do not automatically inherit this full receipt check.
+- No published host ports, host networking or added capabilities are required.
+
+## Offline checks and build
 
 ```sh
-cp runtime.env.example runtime.env
-chmod 600 runtime.env
-# Review model licenses and set NB_SETUP_KEY privately in runtime.env.
-bash scripts/build.sh
-bash scripts/verify-image.sh
-docker run -d --name praxis-llamap-gs-gpu --gpus all \
-  --env-file runtime.env -v praxis-llamap-gs-gpu-data:/workspace praxis-llamap-gpu:dev
+python3 -m unittest discover -s tests -v
 ```
-
-### Switching models at runtime
 
 ```sh
-# 82 GB default (Flash-Next 177B + MTP draft):
-LLAMA_MODEL=qwen3.8-flash-next
-
-# 16 GB VRAM class (Qwen3.6-35B-A3B, needs >=32 GB system RAM):
-LLAMA_MODEL=qwen3.6-35b-a3b
+cp runtime.env.example runtime.env && chmod 600 runtime.env
 ```
 
-That is a single environment variable; the first start downloads and
-SHA256-verifies that variant's pinned files. **Adding your own Qwen model**
-means adding a pinned variant entry to `scripts/llama-models.json` (repository,
-revision, per-file size + sha256 — e.g. `sha256sum` of the downloaded GGUF),
-its default geometry, and optionally a `draft` block; then rebuild the script
-layer (`docker build` reuses the heavy layers). Example manifest entry below.
+Set secrets privately. For a release, first publish/verify the matching router
+with updated agent; pass its immutable reference through `PGPU_IMAGE` when
+running `bash scripts/build.sh`. Without that override the Dockerfile still
+uses the historical router `0.23` — **not an updated-agent release**.
+`IMAGE_TAG` defaults to `praxis-llamacpp-decision:dev`.
+`bash scripts/verify-image.sh` checks the built image without network, GPU,
+models, credentials, host mounts or published ports.
 
-**No public port mappings.** First startup downloads ~20.4 GB of chat weights
-plus ~274 MB of embeddings and verifies pinned SHA256s; subsequent starts reuse
-verified files. Do not enable `--moe-expert-cache-size` on non-CUDA backends;
-the launcher refuses a CPU-only chat fallback.
-
-Source pins: [`LLAMA_CPP.json`](LLAMA_CPP.json) (GenerelSchwerz `moe-cache`
-commit) and [`scripts/llama-models.json`](scripts/llama-models.json) (pinned
-variants: repository revision + SHA256 + geometry defaults). Adding a variant:
-
-```json
-"my-qwen": {
-  "alias": "my-qwen",
-  "license": "<license url>",
-  "note": "<what GPU/RAM it needs>",
-  "context": 8192, "batch": 1024, "ubatch": 1024, "cache_size": 48,
-  "repository": "<org>/<repo>-GGUF",
-  "revision": "<40 hex chars>",
-  "files": [{"path": "<path-in-repo>.gguf", "size": <bytes>, "sha256": "<64 hex>"}]
-}
-```
-
-Then `LLAMA_MODEL=my-qwen` activates it. Multi-file GGUFs list every shard;
-add a `"draft"` block with a separately pinned MTP head to enable draft-mtp.
-[`BASE_STACK.json`](BASE_STACK.json) records the remaining byte-identical base
-stack files. Run `python3 /opt/praxis/bin/acceptance_llama.py --run` against an
-idle, ready container for bounded multi-request API regression checks.
-
-See **[DEPLOY.md](DEPLOY.md)** for hardware sizing, VRAM tuning and operational
-notes.
+[BASE_STACK.json](BASE_STACK.json) preserves **historical** base-file hashes and
+explicit local divergences. It is not an assertion that this evolved fork is
+byte-identical to its ancestor. Current behavior tests cover the overrides.

@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 
-from llama_config import BIN, CODACUS_BIN, child_environment, model_spec, runtime_environment, server_command, settings
+from llama_config import cache_required, child_environment, model_spec, runtime_environment, server_command, settings
 from provision_llama import atomic_json, provision, read_receipt
 from profile_llama import ensure_profile
 
@@ -47,13 +47,14 @@ def runtime_ready(kind, env):
     try:
         return (receipt.get('command') == command_digest(server_command(kind, env))
                 and receipt.get('process') == process_identity(int(receipt['pid']))
-                and (kind != 'chat' or receipt.get('cache_active') is True))
+                and (not cache_required(kind, settings(env)) or receipt.get('cache_active') is True))
     except (OSError, KeyError, TypeError, ValueError):
         return False
 
 
 def require_cuda(env):
-    result = subprocess.run([str(BIN / 'llama-server'), '--list-devices'], env=child_environment(env),
+    binary = server_command('chat', env)[0]
+    result = subprocess.run([binary, '--list-devices'], env=child_environment(env, binary),
                             capture_output=True, text=True, check=True, timeout=60)
     if not re.search(r'^\s*CUDA\d+:', result.stdout, re.MULTILINE):
         raise RuntimeError('No CUDA device reported by the fork binary; refusing CPU-only chat fallback')
@@ -74,18 +75,15 @@ def serve(kind, env):
         return 0
     mode = 'auto: physical cores, affinity and CPU quota' if runtime_environment(env).get('LLAMA_THREADS', 'auto') == 'auto' else 'manual override'
     print(f'llama.cpp {kind}: {config["threads"]} CPU worker threads ({mode})', flush=True)
-    if kind == 'chat' and config.get('chat_recipe') == 'codacus' and config['moe_cache_enabled']:
-        # Routing-Profil MUSS vor dem Serve existieren (einmalig pro Modell,
-        # workload-tolerant — merged code+chat reicht). Fehlt es:
-        # LLAMA_GENERATE_PROFILE=1 capturet automatisch (2 GPU-Traces ~1h),
-        # ohne Flag harter Operatorfehler statt stiller Baseline.
-        ensure_profile(env, generate=bool(config.get('generate_profile')), adopt=False)
     if kind == 'chat':
         require_cuda(env)
     provision(kind, env, download=config['download'])
     if kind == 'chat' and has_draft:
         provision('draft', env, download=config['download'])
-    child = child_environment(env)
+    if kind == 'chat' and config['chat_recipe'] == 'codacus' and config['moe_cache_enabled']:
+        # Profile generation needs verified weights first and remains explicit opt-in.
+        ensure_profile(env, generate=config['generate_profile'], adopt=False)
+    child = child_environment(env, command[0])
     if kind == 'embedding':
         child.pop('GGML_CUDA_REGISTER_HOST', None)
     process = subprocess.Popen(command, env=child, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -96,14 +94,14 @@ def serve(kind, env):
     receipt = {'pid': process.pid, 'process': process_identity(process.pid),
                'command': command_digest(command), 'cache_active': False}
     try:
-        if kind in ('embedding', 'decision'):
+        if not cache_required(kind, config):
             atomic_json(state, receipt)
         for line in process.stdout:
             print(line, end='', flush=True)
             if kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and cache_active(line) and not receipt['cache_active']:
                 receipt['cache_active'] = True
                 atomic_json(state, receipt)
-            if (kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and has_draft
+            if (cache_required(kind, config) and config['chat_recipe'] == 'gs' and has_draft
                     and 'common_speculative_init_result: loading draft model ' in line
                     and not receipt['cache_active']):
                 raise RuntimeError('Main model CUDA expert cache was not activated before MTP drafting')
@@ -122,7 +120,7 @@ def serve(kind, env):
                 raise RuntimeError('Codacus MoE expert cache did not engage before MTP drafting '
                                    '(pack allocation failed) — shrink LLAMA_MOE_CACHE_SLOTS')
         code = process.wait()
-        if kind == 'chat' and config.get('chat_recipe', 'gs') == 'gs' and not receipt['cache_active']:
+        if cache_required(kind, config) and config['chat_recipe'] == 'gs' and not receipt['cache_active']:
             raise RuntimeError('No CUDA MoE expert-cache activation was reported')
         if (kind == 'chat' and config.get('chat_recipe') == 'codacus' and config['moe_cache_enabled']
                 and not receipt['cache_active']):

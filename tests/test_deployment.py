@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -24,6 +25,10 @@ def module(name):
 
 
 class DeploymentTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(module('llama_config'), 'RUNTIME_SETTINGS', self.directory / 'settings.json'))
+
     def test_llama_proxy_keeps_private_listeners_and_routes_embeddings(self):
         proxy = (ROOT / 'scripts/llama-proxy.conf').read_text()
         for text in ['listen 127.0.0.1:11434;', 'proxy_pass http://127.0.0.1:11435;',
@@ -32,27 +37,31 @@ class DeploymentTests(unittest.TestCase):
                      'if ($http_origin != "") { return 403; }', 'location / { return 404; }']:
             self.assertIn(text, proxy)
         self.assertNotIn('0.0.0.0', proxy)
+        for path in ('/props', '/metrics'):
+            block = proxy.split('location = ' + path + ' {', 1)[1].split('location = ', 1)[0]
+            self.assertIn('limit_except GET { deny all; }', block)
+            self.assertIn('proxy_pass http://127.0.0.1:11435;', block)
         docker = (ROOT / 'Dockerfile').read_text()
         self.assertNotIn('OLLAMA_', docker)
         self.assertFalse(any(l.strip().startswith('EXPOSE ') for l in docker.splitlines()))
 
-    def test_supervisor_keeps_only_llama_services_without_download_retry_loops(self):
+    def test_supervisor_includes_decision_without_startup_retry_loops(self):
         c = configparser.ConfigParser(interpolation=None); c.read(ROOT / 'supervisord.conf')
         self.assertEqual(c['unix_http_server']['chmod'], '0700')
-        for kind in ['chat', 'embedding']:
-            setup = c['program:llama-' + kind]
+        for name, kind in [('llama-chat', 'chat'), ('llama-embedding', 'embedding'), ('decision-server', 'decision')]:
+            setup = c['program:' + name]
             self.assertEqual(setup['autorestart'], 'false')
             self.assertEqual(setup['startsecs'], '0')
             self.assertEqual(setup['startretries'], '0')
             self.assertIn('run_llama.py ' + kind, setup['command'])
-        names = ['netbird', 'gpu-agent', 'llama-chat', 'llama-embedding', 'llama-proxy']
+        names = ['netbird', 'gpu-agent', 'llama-chat', 'llama-embedding', 'llama-proxy', 'decision-server']
         self.assertEqual({s for s in c if s.startswith('program:')}, {'program:' + n for n in names})
         for name in names:
             self.assertEqual(c['program:' + name]['stopasgroup'], 'true')
         for name in ['comfyui', 'vosk']:
             self.assertNotIn('program:' + name, c)
 
-    def test_build_pins_generelschwerz_moe_cache_and_16gb_recipe(self):
+    def test_build_pins_all_three_independent_backends(self):
         source = json.loads((ROOT / 'LLAMA_CPP.json').read_text())
         docker = (ROOT / 'Dockerfile').read_text()
         self.assertEqual(source['repository'], 'https://github.com/GenerelSchwerz/llama.cpp')
@@ -62,14 +71,22 @@ class DeploymentTests(unittest.TestCase):
         for text in ['-DGGML_CUDA=ON', '-DGGML_NATIVE=OFF', 'llama-server',
                      'COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp']:
             self.assertIn(text, docker)
-        for old in ['llama-moe-trace', 'flash-attn', 'qwen-tts-venv', 'download_qwen_model.py']:
+        for name, constant in [('codacus', 'CODACUS_REVISION'), ('decision', 'DECISION_REVISION')]:
+            pin = source['additional_forks'][name]
+            self.assertEqual(pin['repository'], 'https://github.com/thecodacus/llama.cpp')
+            self.assertEqual(pin['commit'], getattr(module('llama_config'), constant))
+            self.assertIn(pin['commit'], docker)
+            self.assertIn(f'COPY --from={name}-build {pin["directory"]} {pin["directory"]}', docker)
+            self.assertIn(f'LD_LIBRARY_PATH="{pin["directory"]}/bin:', docker)
+        self.assertIn('--target llama-server llama-moe-trace', docker)
+        self.assertNotIn('/etc/ld.so.conf.d/llama-cpp.conf', docker)
+        for old in ['flash-attn', 'qwen-tts-venv', 'download_qwen_model.py']:
             self.assertNotIn(old, docker)
 
     def test_speech_and_comfyui_are_removed_from_the_llama_fork(self):
         for path in ['custom_nodes', 'workflows', 'constraints.txt', 'docs/COMFYUI_QWEN3.md',
                      'scripts/run_vosk.py', 'scripts/vosk_server.py', 'scripts/provision_vosk.py',
-                     'scripts/xtts_worker.py', 'scripts/install_workflows.py', 'scripts/smoke.py',
-                     'scripts/profile_llama.py']:
+                     'scripts/xtts_worker.py', 'scripts/install_workflows.py', 'scripts/smoke.py']:
             self.assertFalse((ROOT / path).exists(), path)
         env = (ROOT / 'runtime.env.example').read_text()
         for key in ['LLAMA_MODEL=qwen3.8-flash-next', 'LLAMA_DOWNLOAD_MODELS=1',
@@ -109,11 +126,20 @@ class DeploymentTests(unittest.TestCase):
         for text in ['netbird', 'libgomp1', 'libssl3', 'supervisor', 'llama-proxy.conf']:
             self.assertIn(text, docker)
 
-    def test_base_stack_records_only_remaining_files_and_matches_them(self):
+    def test_historical_base_hashes_and_explicit_local_divergences(self):
         base = json.loads((ROOT / 'BASE_STACK.json').read_text())
+        overrides = base['local_overrides']
+        self.assertEqual(set(overrides), {'.dockerignore', 'DEPLOY.md', 'Dockerfile', 'runtime.env.example',
+            'scripts/build.sh', 'scripts/healthcheck.py', 'scripts/verify-image.sh', 'supervisord.conf',
+            'tests/test_deployment.py'})
         for path, expected in base['sha256'].items():
             self.assertTrue((ROOT / path).is_file(), path)
-            self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), expected, path)
+            actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+            if path in overrides:
+                self.assertTrue(overrides[path].strip())
+                self.assertNotEqual(actual, expected, 'Unnecessary override: ' + path)
+            else:
+                self.assertEqual(actual, expected, path)
         for gone in ['custom_nodes', 'workflows', 'docs/', 'constraints.txt', 'scripts/vosk_server.py']:
             self.assertFalse(any(p.startswith(gone) for p in base['sha256']), gone)
 

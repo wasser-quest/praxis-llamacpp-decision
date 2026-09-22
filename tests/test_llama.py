@@ -16,9 +16,17 @@ import provision_llama as provision
 import run_llama as runner
 
 
+def setUpModule():
+    directory = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(directory.cleanup)
+    fixture = patch.object(config, 'RUNTIME_SETTINGS', Path(directory.name) / 'settings.json')
+    fixture.start()
+    unittest.addModuleCleanup(fixture.stop)
+
+
 class ConfigTests(unittest.TestCase):
     @patch.object(config, 'physical_thread_count', return_value=6)
-    def test_default_flash_next_variant_uses_mtp_draft_and_original_geometry(self, detect):
+    def test_default_flash_next_variant_preserves_current_256k_geometry(self, detect):
         args = config.server_command('chat', {})
         detect.assert_called_once_with()
         for key, value in [('--threads', '6'), ('--threads-batch', '6'),
@@ -26,7 +34,7 @@ class ConfigTests(unittest.TestCase):
                            ('--n-cpu-moe', '99'), ('--n-gpu-layers', '99'),
                            ('--flash-attn', 'on'), ('--fit', 'off'), ('--load-mode', 'none'),
                            ('--cache-type-k', 'f16'), ('--cache-type-v', 'f16'),
-                           ('--ctx-size', '4096'), ('--batch-size', '512'), ('--ubatch-size', '512'),
+                           ('--ctx-size', '262144'), ('--batch-size', '512'), ('--ubatch-size', '512'),
                            ('--cache-ram', '0'), ('--moe-expert-cache-size', '56'),
                            ('--spec-type', 'draft-mtp'), ('--spec-draft-ngl', '99'), ('--spec-draft-n-max', '2'),
                            ('--host', '127.0.0.1'), ('--port', '11435'), ('--parallel', '1')]:
@@ -44,7 +52,7 @@ class ConfigTests(unittest.TestCase):
         env = {'LLAMA_MODEL': 'qwen3.6-35b-a3b'}
         args = config.server_command('chat', env)
         detect.assert_called_once_with()
-        for key, value in [('--ctx-size', '65536'), ('--batch-size', '8192'), ('--ubatch-size', '8192'),
+        for key, value in [('--ctx-size', '131072'), ('--batch-size', '8192'), ('--ubatch-size', '8192'),
                            ('--moe-expert-cache-size', '96')]:
             self.assertEqual(args[args.index(key) + 1], value, key)
         for key in ['--spec-type', '--spec-draft-model', '--spec-draft-ngl']:

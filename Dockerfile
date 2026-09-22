@@ -122,7 +122,8 @@ COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp
 # Binaries + eigene Backends (Backend-DL .so mischen sich nicht).
 COPY --from=decision-build /opt/llama.cpp-decision /opt/llama.cpp-decision
 COPY --from=codacus-build /opt/llama.cpp-codacus /opt/llama.cpp-codacus
-RUN printf '/opt/llama.cpp/bin\n/opt/llama.cpp-decision/bin\n/opt/llama.cpp-codacus/bin\n' > /etc/ld.so.conf.d/llama-cpp.conf && ldconfig
+# No global ld.so path containing incompatible forks: launchers set the
+# selected binary's own directory first in LD_LIBRARY_PATH per process.
 COPY LLAMA_CPP.json /opt/praxis/LLAMA_CPP.json
 COPY scripts /opt/praxis/bin
 # pgpu: Router-Call-home-Agent (statisches musl-Binary aus dem Router-Image).
@@ -140,12 +141,18 @@ ENV NB_SOCKS5_LISTENER_PORT=1080 PRAXIS_ROLE=llm \
     PRAXIS_AGENT_ACCEPTANCE_CMD="/usr/bin/python3 /opt/praxis/bin/acceptance_llama.py --run"
 COPY supervisord.conf /etc/supervisor/praxis.conf
 RUN chmod +x /opt/praxis/bin/*.sh \
-    && /opt/llama.cpp/bin/llama-server --help > /tmp/llama-help.txt \
+    && LD_LIBRARY_PATH="/opt/llama.cpp/bin:${LD_LIBRARY_PATH}" /opt/llama.cpp/bin/llama-server --help > /tmp/llama-help.txt \
     && grep -q -- '--moe-expert-cache-size' /tmp/llama-help.txt \
     && grep -q -- '--cache-ram' /tmp/llama-help.txt \
     && grep -q -- '--load-mode' /tmp/llama-help.txt \
     && grep -q -- '--kv-offload' /tmp/llama-help.txt \
-    && grep -q -- '--reasoning-effort' /tmp/llama-help.txt
+    && grep -q -- '--reasoning-effort' /tmp/llama-help.txt \
+    && grep -q -- '--metrics' /tmp/llama-help.txt \
+    && LD_LIBRARY_PATH="/opt/llama.cpp-codacus/bin:${LD_LIBRARY_PATH}" /opt/llama.cpp-codacus/bin/llama-server --help > /tmp/codacus-help.txt \
+    && grep -q -- '--moe-cache-profile' /tmp/codacus-help.txt \
+    && grep -q -- '--metrics' /tmp/codacus-help.txt \
+    && LD_LIBRARY_PATH="/opt/llama.cpp-decision/bin:${LD_LIBRARY_PATH}" /opt/llama.cpp-decision/bin/llama-server --help > /tmp/decision-help.txt \
+    && grep -q -- '--metrics' /tmp/decision-help.txt
 # Syntax check only: nginx does not start during this build step.
 RUN mkdir -p /workspace/logs && nginx -t -c /opt/praxis/bin/llama-proxy.conf
 # Do not EXPOSE API ports: Vast automatically publishes EXPOSE declarations.

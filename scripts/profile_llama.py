@@ -48,8 +48,8 @@ def validate_profile(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def recipe():
-    config = settings(os.environ)
+def recipe(env):
+    config = settings(env)
     return {'fork_revision': CODACUS_REVISION,
             'model': models()['variants'][config['variant']],
             'prompts': PROMPTS, 'tokens_per_prompt': 512}
@@ -57,19 +57,22 @@ def recipe():
 
 def ensure_profile(env, generate=False, adopt=False):
     config, target = settings(env), profile_path(env)
+    if config['chat_recipe'] != 'codacus' or config['variant'] != 'qwen3.8-flash-next':
+        raise ValueError('Routing-profile capture/validation supports only Codacus Flash Next')
+    identity = recipe(env)
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     metadata = target.with_suffix('.json')
     with lock(target.with_suffix('.lock')):
         if target.exists() or target.is_symlink():
             digest = validate_profile(target)
             previous = read_receipt(metadata)
-            if previous.get('recipe') == recipe() and previous.get('sha256') == digest:
+            if previous.get('recipe') == identity and previous.get('sha256') == digest:
                 print('Reusing verified code/chat routing profile', flush=True)
                 return target
             if not adopt:
                 raise RuntimeError('Existing profile is unverified or belongs to another recipe. '
                                    'Preserved; inspect it before explicit --adopt-existing.')
-            atomic_json(metadata, {'recipe': recipe(), 'sha256': digest, 'source': 'operator-adopted'})
+            atomic_json(metadata, {'recipe': identity, 'sha256': digest, 'source': 'operator-adopted'})
             return target
         if adopt or not generate:
             raise RuntimeError('Missing routing profile; set LLAMA_GENERATE_PROFILE=1 for two one-time GPU traces')
@@ -85,7 +88,7 @@ def ensure_profile(env, generate=False, adopt=False):
                         '--fit', 'off', '--load-mode', 'mmap', '--lazy-mode', 'on',
                         '--threads', str(config['threads']), '--threads-batch', str(config['threads']),
                         '--ctx-size', '4096', '--predict', '512', '--prompt', prompt]
-            child = child_environment(env); child['MOE_TRACE_OUT'] = str(trace)
+            child = child_environment(env, command[0]); child['MOE_TRACE_OUT'] = str(trace)
             print(f'Capturing {name} routing profile (up to 512 generated tokens; '
                   f'{config["threads"]} CPU worker threads)', flush=True)
             subprocess.run(command, env=child, check=True, timeout=config['trace_timeout'])
@@ -101,7 +104,7 @@ def ensure_profile(env, generate=False, adopt=False):
             out.flush(); os.fsync(out.fileno())
         digest = validate_profile(merged)
         os.link(merged, target)
-        atomic_json(metadata, {'recipe': recipe(), 'sha256': digest, 'source': 'code+chat'})
+        atomic_json(metadata, {'recipe': identity, 'sha256': digest, 'source': 'code+chat'})
         print(f'Routing profile ready: {target}; source traces retained in {stage}', flush=True)
         return target
 

@@ -4,16 +4,37 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p logs
 if docker info >/dev/null 2>&1; then engine=(docker); else engine=(sudo docker); sudo -v; fi
-image="${IMAGE_TAG:-praxis-llamap-gpu:dev}"
+image="${IMAGE_TAG:-praxis-llamacpp-decision:dev}"
 "${engine[@]}" image inspect "$image" --format 'Image={{.Id}} Architecture={{.Architecture}} Size={{.Size}} ExposedPorts={{json (index .Config "ExposedPorts")}}' | tee logs/verify-image.log
 "${engine[@]}" run --rm -i --network none --entrypoint /bin/bash "$image" <<'CHECKS' 2>&1 | tee -a logs/verify-image.log
 set -euo pipefail
 python3 -m py_compile /opt/praxis/bin/run_llama.py && echo 'launcher compile OK'
 ! command -v ollama
 ! command -v freetoken
-/opt/llama.cpp/bin/llama-server --help >/tmp/llama-help
-for flag in --moe-expert-cache-size --cache-ram --load-mode --kv-offload --jinja --reasoning-effort; do grep -q -- "$flag" /tmp/llama-help; done
-test "$(cat /opt/llama.cpp/REVISION)" = "$(python3 -c 'import json;print(json.load(open("/opt/praxis/LLAMA_CPP.json"))["commit"])')"
+PYTHONPATH=/opt/praxis/bin python3 - <<'PY'
+import json, subprocess
+from pathlib import Path
+from llama_config import child_environment
+source = json.loads(Path('/opt/praxis/LLAMA_CPP.json').read_text())
+forks = {'gs': dict(source, directory='/opt/llama.cpp'), **source['additional_forks']}
+for name, pin in forks.items():
+    root = Path(pin['directory'])
+    assert (root / 'REVISION').read_text().strip() == pin['commit'], name
+    binary = str(root / 'bin/llama-server')
+    env = child_environment({}, binary)
+    help_text = subprocess.check_output([binary, '--help'], env=env, text=True, stderr=subprocess.STDOUT, timeout=60)
+    flags = ['--metrics']
+    if name == 'gs': flags += ['--moe-expert-cache-size', '--cache-ram', '--load-mode', '--kv-offload', '--jinja', '--reasoning-effort']
+    if name == 'codacus':
+        flags += ['--moe-cache-profile', '--moe-cache-slots']
+        assert (root / 'bin/llama-moe-trace').is_file()
+    for flag in flags: assert flag in help_text, (name, flag)
+    libs = subprocess.check_output(['ldd', binary], env=env, text=True, stderr=subprocess.STDOUT, timeout=30)
+    assert 'not found' not in libs, libs
+    for line in libs.splitlines():
+        if '/opt/llama.cpp' in line: assert str(root / 'bin') + '/' in line, line
+    print(name, 'pin, CLI and isolated library resolution OK')
+PY
 nginx -t -c /opt/praxis/bin/llama-proxy.conf
 netbird version
 python3 /opt/praxis/bin/run_llama.py chat --print-command >/tmp/chat-command.json && python3 - <<'PY'
@@ -34,10 +55,10 @@ from pathlib import Path
 assert Path('/opt/llama.cpp/REVISION').read_text().strip() == json.loads(Path('/opt/praxis/LLAMA_CPP.json').read_text())['commit']
 c=configparser.ConfigParser(interpolation=None)
 c.read('/etc/supervisor/praxis.conf')
-assert {s for s in c if s.startswith('program:')} == {'program:'+p for p in ['netbird','gpu-agent','llama-chat','llama-proxy','llama-embedding']}
-for kind in ['chat','embedding']:
-    assert c['program:llama-'+kind]['autorestart']=='false'
-    assert c['program:llama-'+kind]['startretries']=='0'
+assert {s for s in c if s.startswith('program:')} == {'program:'+p for p in ['netbird','gpu-agent','llama-chat','llama-proxy','llama-embedding','decision-server']}
+for name in ['llama-chat','llama-embedding','decision-server']:
+    assert c['program:'+name]['autorestart']=='false'
+    assert c['program:'+name]['startretries']=='0'
 print('Pinned fork and Supervisor definitions OK')
 PY
 mkdir -p /workspace/{llama.cpp,logs} /tmp/empty-models
@@ -45,7 +66,7 @@ pids=()
 trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
 # Router mode exercises the real binaries/HTTP stack without model weights or GPU.
 for port in 11435 11436; do
-  /opt/llama.cpp/bin/llama-server --host 127.0.0.1 --port "$port" --models-dir /tmp/empty-models --no-models-autoload --no-webui >"/tmp/llama-$port.log" 2>&1 &
+  LD_LIBRARY_PATH="/opt/llama.cpp/bin:${LD_LIBRARY_PATH:-}" /opt/llama.cpp/bin/llama-server --host 127.0.0.1 --port "$port" --models-dir /tmp/empty-models --no-models-autoload --no-webui --metrics >"/tmp/llama-$port.log" 2>&1 &
   pids+=("$!")
 done
 nginx -c /opt/praxis/bin/llama-proxy.conf -g 'daemon off;' >/tmp/proxy.log 2>&1 &
@@ -70,8 +91,8 @@ for name,url in [('llama.cpp','http://127.0.0.1:11434/v1/models'),('embedding','
                     print(Path('/tmp/'+f+'.log').read_text()[-12000:])
                 raise
             time.sleep(2)
-for path,headers,expected in [('/v1/models',{'Origin':'https://untrusted.example'},403),('/api/tags',{},404),('/props',{},404)]:
-    try: opener.open(urllib.request.Request('http://127.0.0.1:11434'+path,headers=headers),timeout=3)
+for path,method,headers,expected in [('/v1/models','GET',{'Origin':'https://untrusted.example'},403),('/api/tags','GET',{},404),('/props','POST',{},403),('/metrics','POST',{},403)]:
+    try: opener.open(urllib.request.Request('http://127.0.0.1:11434'+path,method=method,headers=headers),timeout=3)
     except urllib.error.HTTPError as error: assert error.code==expected
     else: raise AssertionError('Expected private proxy rejection')
 print('PASS: CPU image checks only. GPU cache/VRAM geometry, real weights and VPN still require acceptance tests.')

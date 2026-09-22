@@ -1,7 +1,18 @@
 {
   "commit": "d3a28a6b7749948ba239a001a9eeeedafb17f850",
   "copied": "tracked files only; no history, runtime data, credentials or NetBird identity",
-  "note": "Fork of praxis-llamap-gpu stripped to the llama.cpp chat/embedding stack only; speech and ComfyUI components are removed by design.",
+  "note": "Historical base-copy hashes, NOT a checksum manifest for this evolved Decision fork. The explicit local_overrides below identify deliberate divergences covered by current behavior tests. Original hashes remain preserved.",
+  "local_overrides": {
+    ".dockerignore": "Exclude generated profiles, private/runtime data and model weights from build context",
+    "DEPLOY.md": "Current GS/Codacus/Decision deployment and independent hardware acceptance requirements",
+    "Dockerfile": "Three pinned binary/backend builds plus GPU agent; no shared fork library search path",
+    "runtime.env.example": "Current model geometry and Decision/Codacus options",
+    "scripts/build.sh": "Decision image name and explicit router image build argument",
+    "scripts/healthcheck.py": "Readiness includes the enabled Decision server",
+    "scripts/verify-image.sh": "CPU verification of all three binary pins and read-only introspection routes",
+    "supervisord.conf": "GPU-agent and independent Decision server supervisor programs",
+    "tests/test_deployment.py": "Assertions cover the evolved fork rather than claiming the base is unchanged"
+  },
   "repository": "https://forgejo.the.grid/Marvin/praxis-gpu",
   "sha256": {
     ".dockerignore": "969dfd0912cc0c0c953498b26afe5f613151b7e193dec85f7f03068828a103e5",

@@ -5,5 +5,19 @@
   "reference": "https://github.com/GenerelSchwerz/llama.cpp/wiki/16GB-VRAM-Setup",
   "recipe": "Qwen3.6-35B-A3B Q4_K_M (20.4 GB); CUDA MoE expert cache (96 slots/page as the measured starting point on 16 GB VRAM); F16 KV with KV offload; load-mode none, cache-ram 0, fit off, flash attention on; one CPU worker per available physical core (auto, quota-aware); Nomic embeddings on a second CPU llama-server",
   "measured_reference": "Guide owner measured on RTX 5070 Ti 16 GB: cache 132 -> 14,369 MiB peak at NP1; cache 96 is the recommended start. 32 GB system RAM is the practical minimum; 62 GiB preferred.",
-  "note": "GenerelSchwerz moe-cache branch, not Codacus perf. Throughput in the upstream wiki is not a benchmark of this container."
+  "note": "Top-level pin describes GS only. Separate Codacus and Decision binaries/backends below; never mix their shared libraries. Upstream VRAM/throughput references are not acceptance of this container or its current default contexts.",
+  "additional_forks": {
+    "codacus": {
+      "repository": "https://github.com/thecodacus/llama.cpp",
+      "commit": "27c54b4bbcefadedcec6397477cc2e866c1db716",
+      "directory": "/opt/llama.cpp-codacus",
+      "purpose": "Alternative mmap/profile-cache chat and opt-in routing-profile trace"
+    },
+    "decision": {
+      "repository": "https://github.com/thecodacus/llama.cpp",
+      "commit": "14d04e755fa28653e87b9a07072892265bdc0fad",
+      "directory": "/opt/llama.cpp-decision",
+      "purpose": "Independent parallel-decision server"
+    }
+  }
 }

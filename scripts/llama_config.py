@@ -18,6 +18,7 @@ DECISION_BIN = Path('/opt/llama.cpp-decision/bin')  # codacus parallel-decision 
 # Rezept aus praxis-llamap-gpu laufen (moe-cache-profile/-slots statt GS-LRU).
 CODACUS_BIN = Path('/opt/llama.cpp-codacus/bin')
 CODACUS_REVISION = '27c54b4bbcefadedcec6397477cc2e866c1db716'
+DECISION_REVISION = '14d04e755fa28653e87b9a07072892265bdc0fad'
 REVISION = '907a73da9a149faa8c42ccde890f1d575586810f'
 MANIFEST = Path(__file__).with_name('llama-models.json')
 RUNTIME_SETTINGS = Path('/workspace/llama.cpp/runtime-settings.json')
@@ -163,9 +164,11 @@ def settings(env):
                     'LLAMA_GENERATE_PROFILE', 'GGML_MOE_CACHE_PROFILE', 'GGML_MOE_CACHE_SLOTS',
                     'GGML_SCHED_PREFETCH_EXPERTS'})
     forbidden = [k for k, v in env.items() if v and (
-        k in legacy or k.startswith('LLAMA_ARG_') or k.startswith('GGML_MOE_CACHE_') or k.startswith('OLLAMA_'))]
+        k in legacy or k == 'GGML_BACKEND_PATH' or k.startswith('LLAMA_ARG_') or k.startswith('GGML_MOE_CACHE_') or k.startswith('OLLAMA_'))]
     if forbidden:
         raise ValueError('Remove conflicting legacy variables: ' + ', '.join(sorted(forbidden)))
+    if chat_recipe == 'codacus' and enabled(env, 'LLAMA_MOE_CACHE_ENABLED', '1') and variant_name(env) != 'qwen3.8-flash-next':
+        raise ValueError('Codacus routing-profile cache supports only qwen3.8-flash-next; other models require explicit cache disable')
     return {
         'variant': variant_name(env),
         'threads': thread_count(env),
@@ -186,6 +189,7 @@ def settings(env):
         'embedding': enabled(env, 'LLAMA_EMBEDDING_ENABLED', '1'),
         'decision': enabled(env, 'LLAMA_DECISION_ENABLED', '1'),
         'download_timeout': number(env, 'LLAMA_DOWNLOAD_TIMEOUT_SECONDS', 21600, 60, 86400),
+        'trace_timeout': number(env, 'LLAMA_TRACE_TIMEOUT_SECONDS', 3600, 60, 7200),
         'reasoning_effort': (str(env['LLAMA_REASONING_EFFORT'])
                              if env.get('LLAMA_REASONING_EFFORT') in ('minimal', 'low', 'medium', 'high', 'max', 'xhigh')
                              else None),
@@ -199,7 +203,13 @@ def settings(env):
     }
 
 
-def child_environment(env):
+def cache_required(kind, config):
+    """Explicitly disabling a cache is not the same as a failed activation."""
+    return kind == 'chat' and (config['moe_cache_enabled'] if config['chat_recipe'] == 'codacus'
+                              else config['cache_size'] > 0)
+
+
+def child_environment(env, binary=None):
     settings(env)
     child = {key: str(value) for key, value in runtime_environment(env).items()}
     # Host registration is presence-based in this revision: setting it to "0"
@@ -208,6 +218,13 @@ def child_environment(env):
         child['GGML_CUDA_REGISTER_HOST'] = '1'
     else:
         child.pop('GGML_CUDA_REGISTER_HOST', None)
+    if binary is not None:
+        directory = str(Path(binary).parent)
+        allowed = {str(BIN), str(CODACUS_BIN), str(DECISION_BIN)}
+        if directory not in allowed:
+            raise ValueError('Executable must belong to one pinned backend directory')
+        inherited = [p for p in child.get('LD_LIBRARY_PATH', '').split(':') if p and p not in allowed]
+        child['LD_LIBRARY_PATH'] = ':'.join([directory, *inherited])
     return child
 
 
@@ -241,7 +258,7 @@ def decision_server_command(env):
             '--alias', spec['alias'],
             '--host', '127.0.0.1', '--port', str(port),
             '--n-gpu-layers', str(ngl),
-            '--ctx-size', str(context), '--jinja'] + thread_args({'threads': threads})
+            '--ctx-size', str(context), '--jinja', '--metrics'] + thread_args({'threads': threads})
     return args
 
 
@@ -258,7 +275,7 @@ def server_command(kind, env):
             '--alias', models()['variants'][config['variant']]['alias'] if kind == 'chat' else models()['embedding']['alias'],
             '--host', '127.0.0.1',
             '--port', '11435' if kind == 'chat' else '11436',
-            '--parallel', '1', '--no-slots', '--no-warmup']
+            '--parallel', '1', '--no-slots', '--no-warmup', '--metrics']
     if kind == 'chat':
         if config['ubatch'] > config['batch']:
             raise ValueError('LLAMA_UBATCH_SIZE must not exceed LLAMA_BATCH_SIZE')
